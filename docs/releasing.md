@@ -1,15 +1,15 @@
 # Releasing ford
 
-The repository contains CI and a tag-triggered release workflow. It has not yet been connected to a GitHub remote,
-and no GitHub Actions run or public release has been performed from this checkout.
+The repository is hosted at [Marukohe/ford](https://github.com/Marukohe/ford). CI runs on pushes to main and pull
+requests; pushing a version tag triggers the release workflow. Check [Actions](https://github.com/Marukohe/ford/actions)
+for hosted validation results and [Releases](https://github.com/Marukohe/ford/releases) for published downloads.
 
 ## One-Time Setup
 
-Create a GitHub repository, then connect this checkout and push the main branch. Replace OWNER with your account or
-organization; use a different repository name if needed.
+For a fresh local checkout without a remote, connect it to the GitHub repository and push the main branch:
 
 ```bash
-git remote add origin git@github.com:OWNER/ford.git
+git remote add origin git@github.com:Marukohe/ford.git
 git push -u origin main
 ```
 
@@ -130,8 +130,8 @@ python3 -m unittest discover -s scripts -p 'test_release.py' -v
 Use the target matching your native Rust host. The helper rejects a mismatched host, stale executable version,
 unsupported target, incomplete asset set, or tag/package version mismatch.
 
-The release workflows still need their first GitHub run to validate hosted-runner behavior. Local checks do not
-establish native macOS or Linux ARM64 correctness.
+Local checks do not establish native macOS or Linux ARM64 correctness; use the corresponding hosted job results when
+assessing those platforms.
 
 ## References
 

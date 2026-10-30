@@ -96,4 +96,5 @@ Tag-triggered GitHub Actions build native Linux and macOS archives for x86_64 an
 publish version-specific release notes. See [CHANGELOG.md](CHANGELOG.md) for changes and
 [docs/releasing.md](docs/releasing.md) for first-release setup, version updates, and local packaging previews.
 
-The workflow is configured locally; a GitHub remote and the first hosted run are still needed before downloads exist.
+See [Actions](https://github.com/Marukohe/ford/actions) for build results. Published archives will appear on
+[GitHub Releases](https://github.com/Marukohe/ford/releases) when a version tag is pushed and its release workflow passes.
