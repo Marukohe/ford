@@ -1,8 +1,8 @@
 # ford Design
 
 Status: reviewed and implemented for v0.1. Updated: 2026-10-31. The architecture uses spawn with a Rust supervisor.
-State management, `ford list`, and `ford close` are implemented. Linux runtime checks and macOS ARM64 build checks are
-recorded in [validation.md](validation.md); macOS runtime behavior has not been tested.
+State management, `ford list`, and `ford close` are implemented. Native Linux and macOS session tests and Linux real SSH
+checks are recorded in [validation.md](validation.md).
 
 ## 1. Goals and Prerequisites
 

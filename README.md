@@ -15,7 +15,7 @@ accessible. Nothing needs to be installed remotely beyond an SSH server that per
 
 ## Requirements
 
-- Linux or macOS. Linux is tested; macOS ARM64 is build-checked but has not been tested at runtime.
+- Linux or macOS. Native CI tests cover x86_64 and ARM64 on both systems; real SSH tests run on Linux.
 - Rust 1.93.1, selected by `rust-toolchain.toml`, to build from source.
 - An OpenSSH client on PATH, configured keys or an SSH agent, and a verified remote host key.
 

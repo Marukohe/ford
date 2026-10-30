@@ -7,13 +7,21 @@ These are local observations, not performance guarantees for remote machines or 
 
 - `cargo fmt --check`: passed.
 - `cargo clippy --all-targets -- -D warnings`: passed.
-- `cargo test`: 13 passed (2 unit tests and 11 session integration tests).
-- `cargo check --all-targets --target aarch64-apple-darwin`: passed. No macOS runtime testing was performed.
+- `cargo test --locked`: 14 passed (2 unit tests and 12 session integration tests).
+- `cargo clippy --locked --all-targets --target aarch64-apple-darwin -- -D warnings`: passed.
 - Real SSH validation used isolated sshd instances, temporary keys, strict host key verification, and loopback services.
 
 The Cargo tests cover mappings, hostile/invalid inputs, argument boundaries, background creation, live status, name
 reservation, concurrent creation and closure, forced shutdown, foreground SIGINT, failed SSH exits, bounded logs,
 unreachable supervisors, unsafe paths, missing SSH, protocol errors, and abandoned startup before commit.
+
+Native [CI run #3](https://github.com/Marukohe/ford/actions/runs/41095366317) passed at commit `b82b076` on Linux x86_64
+and ARM64 and macOS x86_64 and ARM64. All four runners passed formatting, Clippy, Cargo tests, and release-helper tests.
+The macOS tests use the controlled SSH substitute; real OpenSSH forwarding tests run on the two Linux runners.
+
+The macOS fix handles `killpg` returning `EPERM` for a group containing only exited processes, after confirming the
+owned SSH child has exited without reaping it. Tests cover original SSH exit codes, concurrent close, foreground
+interruption, and cleanup of a live helper after its SSH group leader exits.
 
 Real SSH checks passed for:
 
