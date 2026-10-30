@@ -97,4 +97,5 @@ publish version-specific release notes. See [CHANGELOG.md](CHANGELOG.md) for cha
 [docs/releasing.md](docs/releasing.md) for first-release setup, version updates, and local packaging previews.
 
 See [Actions](https://github.com/Marukohe/ford/actions) for build results. Published archives will appear on
-[GitHub Releases](https://github.com/Marukohe/ford/releases) when a version tag is pushed and its release workflow passes.
+[GitHub Releases](https://github.com/Marukohe/ford/releases) when a version tag is pushed and its release workflow
+passes.
