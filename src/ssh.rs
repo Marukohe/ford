@@ -87,6 +87,10 @@ impl OwnedSsh {
         }
         match killpg(Pid::from_raw(self.pid() as i32), signal) {
             Ok(()) | Err(Errno::ESRCH) => Ok(()),
+            // Darwin excludes zombies from group signalling and returns EPERM when none remain.
+            // Keep the unreaped leader as the PGID guard, and require confirmed exit first.
+            #[cfg(target_os = "macos")]
+            Err(Errno::EPERM) if self.exited()? => Ok(()),
             Err(e) => Err(e.into()),
         }
     }

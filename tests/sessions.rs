@@ -40,6 +40,11 @@ printf '%s\n' "$@" > "$FORD_TEST_ARGS"
 printf 'SSH fixture diagnostic\n' >&2
 case "$FORD_TEST_MODE" in
   fail) exit 255 ;;
+  orphan)
+    sleep 300 &
+    printf '%s\n' "$!" > "$FORD_TEST_HELPER"
+    exit 255
+    ;;
   stubborn)
     trap '' TERM
     sleep 300 &
@@ -295,6 +300,32 @@ fn failure_keeps_diagnostics_and_original_exit() {
     let logs = f.ok(&["logs", "bad"]);
     assert!(String::from_utf8_lossy(&logs.stdout).contains("SSH fixture diagnostic"));
     f.ok(&["close", "bad"]);
+}
+
+#[test]
+fn exited_ssh_still_cleans_its_live_process_group() {
+    let f = Fixture::new();
+    let _ = f
+        .command()
+        .env("FORD_TEST_MODE", "orphan")
+        .args(["devbox", "3000", "--name", "orphan"])
+        .output()
+        .unwrap();
+    let failed = f.wait_state("orphan", "failed");
+    assert_eq!(failed["exit_code"], 255);
+    assert_eq!(failed["cleanup_complete"], true);
+    let helper: i32 = fs::read_to_string(f.root.path().join("helper"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    #[cfg(target_os = "linux")]
+    wait_for(|| {
+        fs::read_to_string(format!("/proc/{helper}/stat")).map_or(true, |s| s.contains(") Z "))
+    });
+    #[cfg(not(target_os = "linux"))]
+    wait_for(|| kill(Pid::from_raw(helper), None).is_err());
+    f.ok(&["close", "orphan"]);
 }
 
 #[test]
