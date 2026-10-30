@@ -5,10 +5,8 @@ ford is a lightweight Rust CLI that forwards remote TCP services to the local ma
 
 ## Current Stage
 
-- The current deliverables are engineering rules and a design draft for user review. Do not create a Cargo project or
-  implementation code during this documentation stage.
-- When the user requests implementation, proceed within the agreed scope. Routine implementation, fixes, and validation
-  do not require additional permission.
+- The user has reviewed the design and authorized Git initialization and implementation. Continue within that scope.
+- Routine implementation, fixes, and validation do not require additional permission.
 - Do not describe planned features as implemented. Update the design when implementation changes command semantics or
   architecture.
 
@@ -52,10 +50,10 @@ ford is a lightweight Rust CLI that forwards remote TCP services to the local ma
 ## Implementation and Validation
 
 - Use English for documentation, development notes, code comments, CLI help, and error messages.
+- Keep Markdown source lines at 120 characters or fewer; reformat wide tables when necessary.
 - Commit `Cargo.lock` when the application project is created. Select dependency and toolchain versions based on actual
   validation.
-- For code changes, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`. The project
-  currently contains only Markdown; do not run or claim to have run these checks at this stage.
+- For code changes, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
 - Test observable behavior: argument parsing, SSH argument boundaries, failure exits, port conflicts, real byte
   forwarding, list/close, concurrency, and supervisor failures. Verify that ports are released after shutdown. Avoid
   tests that merely repeat implementation details.

@@ -1,7 +1,8 @@
-# ford Design Draft
+# ford Design
 
-Status: awaiting review; not implemented. Date: 2026-10-30. The architecture uses spawn with a Rust supervisor. State
-management, `ford list`, and `ford close` are first-release requirements.
+Status: reviewed and implemented for v0.1. Updated: 2026-10-31. The architecture uses spawn with a Rust supervisor.
+State management, `ford list`, and `ford close` are implemented. Linux runtime checks and macOS ARM64 build checks are
+recorded in [validation.md](validation.md); macOS runtime behavior has not been tested.
 
 ## 1. Goals and Prerequisites
 
@@ -23,7 +24,7 @@ requested forwarding.
 ## 2. Technology and Architecture
 
 - **Component: Language and build**
-  - Choice: Stable Rust, Cargo
+  - Choice: Rust 1.93.1, Cargo, committed Cargo.lock
   - Reason: Control resource use and keep build and dependency management consistent
 - **Component: CLI**
   - Choice: `clap`
@@ -41,8 +42,12 @@ requested forwarding.
   - Choice: `serde` / `serde_json`
   - Reason: Small structured messages and state snapshots without a database
 - **Component: Unix facilities**
-  - Choice: `nix`, `signal-hook`, with features enabled as needed
-  - Reason: Sessions, process groups, file locks, and signals without maintaining raw system call wrappers
+  - Choice: `nix`, `signal-hook`, and `rustix`, with features enabled as needed
+  - Reason: Sessions, process groups, socket flags, signals, and portable non-reaping waits without application unsafe
+    code. File locks use the standard library.
+- **Component: Session IDs**
+  - Choice: `getrandom`
+  - Reason: Obtain unique random IDs from the OS without a larger random-number framework
 - **Component: Output**
   - Choice: Concise text and per-session logs
   - Reason: Preserve SSH diagnostics in background mode
@@ -96,6 +101,8 @@ ford close web
 ford close <SESSION_ID>
 ford close --all
 ford logs web
+ford logs web --lines 100
+ford list --json
 
 ford --help
 ford --version
@@ -235,8 +242,9 @@ supervisor establishes its control socket, spawns SSH, updates state, and acknow
 returns the ID after acknowledgment. Exit 0 means the session creation request was accepted, not that the tunnel is
 ready. If SSH has already failed, return a failure and the log location.
 
-Startup has a timeout. On timeout, print the allocated session ID and direct the user to list to verify the outcome
-rather than blindly creating another session. If the startup pipe disconnects before acknowledgment, the supervisor
+Startup exchanges have a 10-second timeout. On timeout, print the allocated session ID and direct the user to list
+to verify the outcome rather than blindly creating another session. If the startup pipe disconnects before
+acknowledgment, the supervisor
 cancels the incomplete startup and cleans up; do not leave an unreported active session behind.
 
 `ford close <ID|NAME>` sends a control request. The supervisor that owns the child performs shutdown:
@@ -323,8 +331,9 @@ diagnostic information, not proof of control authority.
 
 ### Storage and Concurrency
 
-Prefer `$XDG_RUNTIME_DIR/ford` for runtime files when it is owned by the current user and has correct permissions;
-otherwise use `~/.ford/run`. Store persistent state under `$XDG_STATE_HOME/ford`, falling back to `~/.local/state/ford`
+Use `$XDG_RUNTIME_DIR/ford` for runtime files when set; reject invalid ownership, permissions, or symbolic links.
+When unset, use `~/.ford/run`. Store persistent state under `$XDG_STATE_HOME/ford`, falling back to
+`~/.local/state/ford`
 when unset. Validate Unix socket path lengths and report excessive lengths rather than silently falling back to an
 unsafe shared directory.
 
@@ -414,12 +423,12 @@ compare:
 Establish a default release baseline before measuring the size and startup effects of LTO, stripping, or optimization
 levels. Do not sacrifice authentication, trust verification, truthful state, or cleanup to improve performance figures.
 
-## 10. Review Points
+## 10. Agreed Scope
 
 Rust with system SSH and a retained spawn-based supervisor is agreed. List/close belong in the first release and must
 not be removed to reduce initial scope or overhead.
 
-The remaining choices in this draft are one supervisor per session, background operation by default with `--foreground`
+The implementation uses one supervisor per session, background operation by default with `--foreground`
 available, noninteractive authentication in both modes, Linux/macOS support only, and local bind and remote target
 addresses initially fixed to `127.0.0.1`. The running state means only that the SSH process is alive; service health
 remains unverified.
