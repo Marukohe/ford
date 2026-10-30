@@ -89,3 +89,11 @@ aliases or credentials. The SSH script creates temporary keys and configuration 
 strict path checks remain enabled. It does not modify your SSH configuration or keys.
 
 For architecture and validation details, see [docs/design.md](docs/design.md).
+
+## Releases
+
+Tag-triggered GitHub Actions build native Linux and macOS archives for x86_64 and ARM64, attach SHA256 checksums, and
+publish version-specific release notes. See [CHANGELOG.md](CHANGELOG.md) for changes and
+[docs/releasing.md](docs/releasing.md) for first-release setup, version updates, and local packaging previews.
+
+The workflow is configured locally; a GitHub remote and the first hosted run are still needed before downloads exist.

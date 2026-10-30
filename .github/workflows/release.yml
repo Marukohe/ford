@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain
+      - name: Require the tag to match Cargo.toml
+        id: check
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/release.py check-version "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+
+  checks:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [version, checks]
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain
+      - name: Build and package the native executable
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --release --locked --target "$BUILD_TARGET"
+          python3 scripts/release.py package "$RELEASE_TAG" "$BUILD_TARGET" --output target/dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.target }}
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup show active-toolchain
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: target/dist
+          merge-multiple: true
+      - name: Install the pinned changelog generator
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/git-cliff.tar.gz"
+          url="https://github.com/orhun/git-cliff/releases/download/v2.13.0"
+          curl --fail --silent --show-error --location --retry 3 \
+            "$url/git-cliff-2.13.0-x86_64-unknown-linux-gnu.tar.gz" --output "$archive"
+          echo "29d816ea0a1f73febb9e7fe34e09d837abe8c492ee7f9c20277c3e3d0c076a49  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/git-cliff-2.13.0" >> "$GITHUB_PATH"
+      - name: Assemble checksums and release notes
+        run: |
+          python3 scripts/release.py checksums "$RELEASE_TAG" --directory target/dist
+          python3 scripts/release.py notes "$RELEASE_TAG" --output target/release-notes.md
+      - name: Publish the release and all assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        shell: bash
+        run: |
+          options=()
+          if [[ "$PRERELEASE" == true ]]; then options+=(--prerelease --latest=false); fi
+          gh release create "$RELEASE_TAG" target/dist/*.tar.gz target/dist/SHA256SUMS \
+            --verify-tag --title "ford $RELEASE_TAG" --notes-file target/release-notes.md "${options[@]}"

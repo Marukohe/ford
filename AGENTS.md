@@ -51,6 +51,10 @@ ford is a lightweight Rust CLI that forwards remote TCP services to the local ma
 
 - Use English for documentation, development notes, code comments, CLI help, and error messages.
 - Keep Markdown source lines at 120 characters or fewer; reformat wide tables when necessary.
+- Use Conventional Commit subjects so commit-based release notes remain useful.
+- Keep release tags, Cargo.toml, Cargo.lock, and CHANGELOG.md consistent. Release procedures are in docs/releasing.md.
+- For release tooling changes, run `python3 -m unittest discover -s scripts -p 'test_release.py' -v`, lint workflows,
+  and validate a native package when packaging behavior changes.
 - Commit `Cargo.lock` when the application project is created. Select dependency and toolchain versions based on actual
   validation.
 - For code changes, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
