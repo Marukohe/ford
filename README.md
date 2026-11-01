@@ -1,101 +1,188 @@
 # ford
 
-A lightweight Rust CLI for forwarding remote TCP ports over system OpenSSH, with background sessions and live control.
+Access remote web apps, dashboards, and APIs from your own machine through SSH.
+
+ford brings a remote port to `localhost` and keeps the tunnel running in the background. Give each tunnel a name,
+list your sessions, and close them when you are done.
 
 ```bash
-cargo build --release
-
-./target/release/ford devbox 3000 --name web
-./target/release/ford list
-./target/release/ford close web
-```
-
-Open `http://127.0.0.1:3000` to access the service on `devbox` at `127.0.0.1:3000`. Only the remote SSH port needs to be
-accessible. Nothing needs to be installed remotely beyond an SSH server that permits forwarding.
-
-## Requirements
-
-- Linux or macOS. Native CI tests cover x86_64 and ARM64 on both systems; real SSH tests run on Linux.
-- Rust 1.93.1, selected by `rust-toolchain.toml`, to build from source.
-- An OpenSSH client on PATH, configured keys or an SSH agent, and a verified remote host key.
-
-ford uses noninteractive authentication. Before first use, run ordinary `ssh devbox` to confirm the host key and verify
-login. ford reads your existing SSH aliases, identities, login ports, and jump-host configuration.
-
-## Commands
-
-```bash
-# Local 8080 -> remote 127.0.0.1:300
-ford user@example.com 8080:300 --name web
-
-# Multiple mappings share one SSH connection
-ford devbox 3000 5173 8080:8000 --name dev
-
-# Stream diagnostics; Ctrl+C closes the session
-ford devbox 3000 --foreground
+ford user@server 8080:3000 --name web
+# Open http://127.0.0.1:8080 in your browser
 
 ford list
-ford list --all                 # Include completed sessions
-ford list --json                # Structured live state
-ford close web                  # Name, full ID, or unique ID prefix
-ford close --all
-ford logs web --lines 100
-
-# Explicit creation syntax, including hosts named after subcommands
-ford open list 3000
+ford close web
 ```
 
-Creation runs in the background by default and returns a session ID. `running` means that the SSH process is alive;
-forwarding and target availability remain `unverified`. Creation acknowledgment does not prove the web service is ready.
+Your server only needs an SSH port accessible to you, usually port 22. The web app can stay on the server's
+`127.0.0.1:3000`; you do not need to expose that port publicly or install ford on the server.
 
-Each session has one Rust supervisor and one SSH child; the Rust process does not carry web traffic. `close` asks the
-supervisor to terminate and reap its SSH child before reporting success. It escalates to SIGKILL if SIGTERM takes more
-than five seconds. Once sessions finish, their supervisors exit and leave metadata and bounded logs for inspection.
+## Install
 
-An unreachable supervisor is reported as `unreachable`. ford does not kill a PID from a stale state file. Automatic
-reconnection and orphan-session recovery are not implemented. See [the design](docs/design.md) for behavior and limits.
+ford supports Linux and macOS on Intel/AMD x86_64 and ARM64, including Apple Silicon. You need an OpenSSH client
+(`ssh`) on your machine and an SSH server that allows TCP forwarding on the remote machine.
 
-## Local Files
+### Quick install
 
-- Runtime sockets and locks: `$XDG_RUNTIME_DIR/ford`, or `~/.ford/run` when unset.
-- State and logs: `$XDG_STATE_HOME/ford`, or `~/.local/state/ford` when unset.
-- ford directories are private (0700); files and control sockets are restricted to the current user (0600).
-- Each log is capped at 1 MiB with one rotated backup. Completed session records are retained.
-
-Invalid runtime directory ownership, permissions, or symbolic links cause an explicit error. Existing SSH forwarding
-directives are also inherited; use an SSH alias without extra forwards if you want only the mappings requested by ford.
-
-## Validation
+In Bash or zsh, run:
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-
-# Requires Python 3, ssh, ssh-keygen, and sshd; uses isolated keys and loopback listeners
-python3 scripts/test-ssh.py
-
-# Release-build integration checks and Linux management overhead measurements
-cargo build --release
-python3 scripts/test-ssh.py --binary target/release/ford --bench --report target/ssh-validation.json
-
-# Compile check only; this does not establish macOS runtime correctness
-rustup target add aarch64-apple-darwin --toolchain 1.93.1
-cargo check --target aarch64-apple-darwin
+curl -fsSL https://raw.githubusercontent.com/Marukohe/ford/main/scripts/install.sh | sh
 ```
 
-Default Cargo tests use private temporary directories and a controlled SSH substitute; they do not use personal SSH
-aliases or credentials. The SSH script creates temporary keys and configuration under your home directory so sshd's
-strict path checks remain enabled. It does not modify your SSH configuration or keys.
+The installer downloads the latest stable release for your machine, verifies its SHA256 checksum, and installs
+`ford` in `~/.local/bin`. It configures PATH for future Bash or zsh terminals. Open a new terminal or run the command
+printed by the installer to activate PATH in your current terminal. Rust and sudo are not required. Run the same
+installation command again to upgrade.
 
-For architecture and validation details, see [docs/design.md](docs/design.md).
+Quick installation requires a published GitHub Release. If no release is available yet, use the source installation
+below.
 
-## Releases
+### Download manually
 
-Tag-triggered GitHub Actions build native Linux and macOS archives for x86_64 and ARM64, attach SHA256 checksums, and
-publish version-specific release notes. See [CHANGELOG.md](CHANGELOG.md) for changes and
-[docs/releasing.md](docs/releasing.md) for first-release setup, version updates, and local packaging previews.
+Download the archive matching your machine from [GitHub Releases](https://github.com/Marukohe/ford/releases).
+Choose the compiled archive rather than GitHub's source-code downloads:
 
-See [Actions](https://github.com/Marukohe/ford/actions) for build results. Published archives will appear on
-[GitHub Releases](https://github.com/Marukohe/ford/releases) when a version tag is pushed and its release workflow
-passes.
+| Machine | Archive filename ends with |
+| --- | --- |
+| Linux Intel/AMD x86_64 | `x86_64-unknown-linux-gnu.tar.gz` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Intel | `x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `aarch64-apple-darwin.tar.gz` |
+
+For example, after downloading the Linux x86_64 archive and `SHA256SUMS` from the same release:
+
+```bash
+grep '  ford-v0.1.0-x86_64-unknown-linux-gnu.tar.gz$' SHA256SUMS | sha256sum --check
+tar -xzf ford-v0.1.0-x86_64-unknown-linux-gnu.tar.gz ford
+mkdir -p "$HOME/.local/bin"
+install -m 755 ford "$HOME/.local/bin/ford"
+export PATH="$HOME/.local/bin:$PATH"
+ford --version
+```
+
+On macOS, use `shasum -a 256 --check` for checksum verification and substitute the appropriate archive filename.
+For manual installation, also add the PATH export to `~/.zshrc` or `~/.bashrc` to keep it in future terminals.
+Linux archives require glibc: x86_64 builds use Ubuntu 22.04 and ARM64 builds use Ubuntu 24.04.
+
+### Build from source
+
+Install Git and Rust through rustup, then run:
+
+```bash
+git clone https://github.com/Marukohe/ford.git
+cd ford
+cargo install --path . --locked
+ford --version
+```
+
+The repository selects Rust 1.93.1 automatically. Cargo installs `ford` in `~/.cargo/bin`; make sure that directory is
+on your `PATH`.
+
+## Your first tunnel
+
+First, check that you can log in to the server:
+
+```bash
+ssh user@server
+```
+
+Confirm its host key and set up an SSH key or agent before using ford. ford uses your existing SSH configuration and
+does not prompt for passwords or key passphrases. Exit the remote shell to return to your local terminal.
+
+Suppose a web app runs on port 3000 on that server:
+
+```bash
+ford user@server 8080:3000 --name web
+```
+
+Open `http://127.0.0.1:8080` in your local browser. The tunnel runs in the background, so you can keep using your
+terminal. When you are finished:
+
+```bash
+ford close web
+```
+
+Local ports bind to `127.0.0.1`, so other machines on your network cannot use your tunnel.
+
+## Choose your ports
+
+Use `LOCAL:REMOTE` to choose a local port. A single port number uses the same port on both machines.
+
+| Command | Local address | Remote service |
+| --- | --- | --- |
+| `ford devbox 3000` | `127.0.0.1:3000` | `devbox` at `127.0.0.1:3000` |
+| `ford devbox 8080:3000` | `127.0.0.1:8080` | `devbox` at `127.0.0.1:3000` |
+| `ford devbox 8080:300` | `127.0.0.1:8080` | `devbox` at `127.0.0.1:300` |
+
+Forward several services through one session:
+
+```bash
+ford devbox 3000 5173 8080:8000 --name dev
+```
+
+If a local port is already in use, choose another one, such as `8081:3000`.
+
+## Manage your tunnels
+
+```bash
+ford list                       # List current sessions
+ford list --all                 # Also show completed sessions
+ford close web                  # Close a named session
+ford close --all                 # Close all current sessions
+ford logs web                   # Read recent SSH diagnostics
+ford logs web --lines 100        # Show the last 100 lines
+ford list --json                 # Get session details for scripts
+```
+
+You can use a session's full ID or a unique ID prefix in place of its name. Completed sessions retain their logs,
+and you can reuse a name after its session has finished.
+
+For a temporary tunnel that shows SSH diagnostics in your terminal, use foreground mode:
+
+```bash
+ford devbox 3000 --foreground
+```
+
+Press Ctrl+C to close it.
+
+## Use your SSH configuration
+
+ford accepts SSH aliases, so you can keep usernames, custom SSH ports, keys, and jump hosts in `~/.ssh/config`.
+For example:
+
+```sshconfig
+Host devbox
+    HostName server.example.com
+    User alice
+    Port 2222
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+Then run `ford devbox 8080:3000 --name web`.
+
+Existing port forwards in your SSH configuration also apply. Use an alias without extra forwards if you only want
+the ports specified in your ford command.
+
+## Troubleshooting
+
+**The session says `running`, but the page does not load.** `running` means the SSH process is alive. ford does not
+check whether the remote app is listening or serving HTTP, so the target is shown as `unverified`. Check the app on
+the server, confirm the port mapping, and run `ford logs web` for SSH errors.
+
+**Authentication or host key verification fails.** Try `ssh devbox` and resolve the SSH error there. ford needs key
+or agent authentication that works without a password or passphrase prompt.
+
+**A session failed or disappeared from the list.** Run `ford list --all` and `ford logs web`. Logs remain available
+after a session ends. ford does not automatically reconnect; start a new session after resolving the problem.
+
+**A session says `unreachable`.** ford cannot contact the process managing that tunnel, so it cannot confirm whether
+the tunnel is still active or close it automatically. Check your local processes before starting a replacement on
+the same local port.
+
+## More information
+
+- [Changelog](CHANGELOG.md)
+- [Releases and release notes](https://github.com/Marukohe/ford/releases)
+- [Design and behavior](docs/design.md)
+- [Validation results](docs/validation.md)
+- [Release maintenance](docs/releasing.md)

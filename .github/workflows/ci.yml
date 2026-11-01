@@ -33,6 +33,10 @@ jobs:
       - run: cargo test --locked
       - name: Test release helpers
         run: python3 -m unittest discover -s scripts -p 'test_release.py' -v
+      - name: Test the release installer
+        run: |
+          sh -n scripts/install.sh
+          python3 -m unittest discover -s scripts -p 'test_install.py' -v
       - name: Install the isolated SSH test prerequisites
         if: runner.os == 'Linux'
         run: |

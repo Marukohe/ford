@@ -15,6 +15,7 @@ Notable changes in each version of ford.
 - Reuse SSH aliases, configured identities, agents, login ports, and jump hosts.
 - Report unreachable supervisors without killing processes from stale PID records.
 - Build native Linux and macOS release archives for x86_64 and ARM64, with SHA256 checksums.
+- Install release binaries with platform detection, SHA256 verification, and automatic shell PATH setup.
 
 ### Requirements and Limits
 

@@ -20,6 +20,36 @@ CI runs on pushes to main and pull requests. It checks formatting, Clippy, Cargo
 native runners. Linux runners also run the isolated real SSH checks. The release workflow calls the same CI before
 building release archives.
 
+## Installer
+
+The `scripts/install.sh` script downloads compiled release archives. It reads the latest release's `SHA256SUMS`
+through GitHub's stable download URL, selects the native target, then downloads that exact version's archive. A
+specific version can be selected with `--version v0.1.0`. It does not use the GitHub API or require Rust on the user's
+machine. See
+[GitHub's release links](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases).
+
+The script verifies the checksum and runs `ford --version` before replacing an existing executable. Its default
+destination is `~/.local/bin`, with an optional absolute `--bin-dir`. It writes a PATH loader to
+`~/.local/share/ford/env` and adds it once to the relevant shell startup files. Bash configures `.bashrc` and the
+active login profile; zsh configures `.zshrc` under `$ZDOTDIR` or `$HOME`. `--no-modify-path` leaves startup files
+alone. The installer prints a source command for the current terminal, since a child process cannot change its
+parent's environment. Users can run that command or open a new terminal after installing.
+
+Publish `scripts/install.sh` on `main` before advertising the raw GitHub installer URL. Publish the first release
+before downloads can succeed. Keep archive names and `SHA256SUMS` compatible with the installer when changing assets.
+CI tests the installer on all four native runners using isolated homes, controlled downloads, and real checksum tools:
+
+```bash
+sh -n scripts/install.sh
+python3 -m unittest discover -s scripts -p 'test_install.py' -v
+```
+
+For a specific version or installation directory, run the script with options:
+
+```bash
+sh scripts/install.sh --version v0.1.0 --bin-dir "$HOME/bin"
+```
+
 ## First Release
 
 `Cargo.toml` and `Cargo.lock` currently identify version 0.1.0. Its curated release notes are already in CHANGELOG.md.
