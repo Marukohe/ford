@@ -79,11 +79,11 @@ else
     manifest_url=$repository/releases/download/$version/SHA256SUMS
 fi
 download() {
-    curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 --max-time 300 \
-        --proto '=https' --proto-redir '=https' "$1" --output "$2"
+    curl --fail --show-error --location --retry 3 --connect-timeout 15 --max-time 300 \
+        --proto '=https' --proto-redir '=https' "$@"
 }
 printf 'Finding ford %s for %s...\n' "$version" "$target"
-download "$manifest_url" "$work_dir/SHA256SUMS" ||
+download --silent "$manifest_url" --output "$work_dir/SHA256SUMS" ||
     fail "cannot download release checksums; check that the requested release is published: $manifest_url"
 
 # Resolve the tag from the manifest, then pin the archive URL to that tag even if latest changes.
@@ -103,7 +103,7 @@ if [ "$version" != latest ] && [ "$version" != "$resolved_version" ]; then
 fi
 version=$resolved_version
 printf 'Downloading ford %s...\n' "$version"
-download "$repository/releases/download/$version/$asset" "$work_dir/archive.tar.gz" ||
+download --progress-bar "$repository/releases/download/$version/$asset" --output "$work_dir/archive.tar.gz" ||
     fail "cannot download $asset"
 if [ "$checksum_tool" = sha256sum ]; then
     actual=$(sha256sum "$work_dir/archive.tar.gz")
