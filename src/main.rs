@@ -3,6 +3,7 @@
 #[cfg(not(unix))]
 compile_error!("ford currently supports Linux and macOS only");
 
+mod check;
 mod cli;
 mod control;
 mod error;
@@ -83,7 +84,7 @@ fn execute() -> Result<i32> {
                         session.host,
                         mappings,
                         session.state.label(),
-                        session.target
+                        session.target_label()
                     );
                     if let Some(error) = session.error {
                         println!("  {error}");
@@ -122,6 +123,11 @@ fn execute() -> Result<i32> {
                 }
             }
             Ok(i32::from(failures > 0))
+        }
+        Action::Check(args) => {
+            let paths = Paths::discover()?;
+            let session = paths.resolve(&args.target)?;
+            check::run(&paths, &session, &args)
         }
         Action::Logs { target, lines } => {
             let paths = Paths::discover()?;

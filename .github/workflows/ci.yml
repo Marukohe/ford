@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes openssh-server
+          sudo apt-get install --yes openssh-server curl lsof
           sudo install -d -m 0755 /run/sshd
       - name: Test real SSH forwarding and cleanup
         if: runner.os == 'Linux'

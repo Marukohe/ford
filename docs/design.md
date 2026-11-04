@@ -210,8 +210,8 @@ starting → running → closing → closed
 - **State: `starting`**
   - Meaning supported by evidence: The supervisor is registered and is preparing or starting SSH
 - **State: `running`**
-  - Meaning supported by evidence: The supervisor owns an SSH child that has not exited; forwarding and target
-    availability remain unverified
+  - Meaning supported by evidence: The supervisor owns an SSH child that has not exited. This state does not establish
+    forwarding or target availability.
 - **State: `closing`**
   - Meaning supported by evidence: Shutdown has been accepted; child termination and reaping are in progress
 - **State: `closed`**
@@ -227,13 +227,31 @@ starting → running → closing → closed
 An SSH exit without a user shutdown request is unexpected even if its exit code is 0. Store the original exit code or
 signal separately. Do not mark a session `closed` before cleanup completes.
 
-The state machine describes lifecycle, not service health. In the first release, `forwarding` and `target` check results
-remain `unverified`. Do not infer successful connection from English SSH log messages or treat a process surviving a
-fixed sleep as evidence of readiness.
+The state machine describes lifecycle, not service health. `forwarding` stays `unverified`. The `target` result is
+`unverified` until an on-demand HTTP check records an observation. Do not infer readiness from SSH log messages or
+from a process surviving a fixed sleep.
 
 `ExitOnForwardFailure=yes` detects forwarding setup failures such as a local port conflict. It does not guarantee target
 reachability or server permission for every subsequent forwarded connection. A successful local TCP handshake alone also
 does not prove the remote web service is available.[3]
+
+### On-demand HTTP checks
+
+`ford check SESSION [--port LOCAL] --http PATH [--expect-status CODE]` performs one HTTP GET through a selected
+mapping. The port is required for multiple mappings. Any complete HTTP response establishes HTTP reachability;
+`--expect-status` additionally requires an exact status code. Missing responses are recorded as timeouts or
+connection errors. Probe results do not change the lifecycle state or cause reconnection.
+
+The CLI queries the live supervisor for the SSH PID and mapping. It uses `lsof` to confirm SSH owns the exact loopback
+listener before and after the request. `curl` makes the HTTP request with a three-second transfer timeout, without
+proxies, user curl configuration, or redirect following. These system tools supply listener ownership and HTTP handling
+that the Rust standard library does not provide. They are needed only for `ford check` and add no work to idle sessions.
+
+The CLI submits the observation through the existing private control socket. The supervisor accepts it only for a
+matching mapping in a running session, and persists the result atomically. The probe itself runs outside the
+supervisor, so a slow HTTP response does not delay status or close requests. The result and Unix timestamp are kept
+per local port in `target_checks`; the request path and response body are not stored. Text output shows the result age.
+Completed sessions retain check history. An unverified listener produces an error and leaves that history intact.
 
 ### Creation and Shutdown
 
@@ -319,8 +337,8 @@ diagnostic information, not proof of control authority.
 ### Control Protocol
 
 - Use one Unix socket per session through standard-library `UnixListener`/`UnixStream`.[4]
-- The initial protocol supports only `status` and `close`, carrying a protocol version, full session ID, request ID, and
-  result. Encode messages as JSON lines.
+- The protocol supports `status`, `close`, and recording target checks, carrying a protocol version, full session ID,
+  request ID, and result. Encode messages as JSON lines. Older sessions remain readable; restart them to record checks.
 - Limit request sizes and set read/write timeouts. List uses bounded concurrency and an overall deadline so one stuck
   session cannot block other results.
 - Restrict access to the current user: parent directories use mode 0700, sockets and metadata use 0600. Check directory
@@ -367,7 +385,7 @@ errors.
   - Requirements: Implement truthful state, process ownership, concurrency, and cleanup together
 - **Stage: v0.2**
   - Scope: `--retry`, optional `--open`, remote target address and local bind options
-  - Requirements: Define retry policy, target checks, and exposure boundaries
+  - Requirements: Define retry policy, optional periodic checks, and exposure boundaries
 - **Stage: Later**
   - Scope: Named forwarding configurations, abnormal session recovery, history cleanup
   - Requirements: Never treat metadata cleanup as process shutdown
@@ -430,8 +448,8 @@ not be removed to reduce initial scope or overhead.
 
 The implementation uses one supervisor per session, background operation by default with `--foreground`
 available, noninteractive authentication in both modes, Linux/macOS support only, and local bind and remote target
-addresses initially fixed to `127.0.0.1`. The running state means only that the SSH process is alive; service health
-remains unverified.
+addresses initially fixed to `127.0.0.1`. The running state means only that the SSH process is alive; an on-demand
+check records HTTP reachability separately.
 
 ## References
 

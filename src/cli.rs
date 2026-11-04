@@ -37,12 +37,29 @@ pub enum Action {
         #[arg(long)]
         all: bool,
     },
+    /// Check an HTTP endpoint through an existing session
+    Check(Check),
     /// Show recent SSH diagnostics
     Logs {
         target: String,
         #[arg(long, default_value_t = 200, value_parser = clap::value_parser!(u32).range(1..=10000))]
         lines: u32,
     },
+}
+
+#[derive(Args)]
+pub struct Check {
+    /// Session name, ID, or unique ID prefix
+    pub target: String,
+    /// Local port (required for sessions with multiple mappings)
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    pub port: Option<u16>,
+    /// HTTP path to request, such as / or /health
+    #[arg(long, value_name = "PATH")]
+    pub http: String,
+    /// Require a specific status; otherwise any HTTP response proves reachability
+    #[arg(long, value_parser = clap::value_parser!(u16).range(100..=599))]
+    pub expect_status: Option<u16>,
 }
 
 #[derive(Args)]
@@ -72,7 +89,7 @@ pub fn parse() -> Cli {
     let mut args: Vec<OsString> = std::env::args_os().collect();
     if let Some(first) = args.get(1).and_then(|s| s.to_str())
         && !first.starts_with('-')
-        && !["open", "list", "close", "logs", "help"].contains(&first)
+        && !["open", "list", "close", "check", "logs", "help"].contains(&first)
     {
         args.insert(1, OsString::from("open"));
     }

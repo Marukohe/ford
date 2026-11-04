@@ -1,4 +1,5 @@
 use crate::{
+    check::TargetCheck,
     cli::Open,
     error::{Error, Result},
     mapping::Mapping,
@@ -6,6 +7,7 @@ use crate::{
 use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, File, OpenOptions, TryLockError},
     io::{Read, Write},
@@ -63,12 +65,35 @@ pub struct Session {
     pub cleanup_complete: bool,
     pub forwarding: String,
     pub target: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub target_checks: BTreeMap<u16, TargetCheck>,
     pub log_path: PathBuf,
 }
 
 impl Session {
     pub fn terminal(&self) -> bool {
         matches!(self.state, Status::Closed | Status::Failed) && self.cleanup_complete
+    }
+
+    pub fn target_label(&self) -> String {
+        if self.target_checks.is_empty() {
+            return self.target.clone();
+        }
+        self.mappings
+            .iter()
+            .map(|mapping| {
+                let label = self
+                    .target_checks
+                    .get(&mapping.local)
+                    .map_or_else(|| "unverified".into(), TargetCheck::label);
+                if self.mappings.len() == 1 {
+                    label
+                } else {
+                    format!("{}: {label}", mapping.local)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -325,6 +350,7 @@ impl Paths {
             cleanup_complete: false,
             forwarding: "unverified".into(),
             target: "unverified".into(),
+            target_checks: Default::default(),
         };
         self.save(&session)?;
         Ok(session)

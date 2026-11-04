@@ -1,4 +1,5 @@
 use crate::{
+    check::TargetCheck,
     error::{Error, Result},
     state::{Paths, Session, random_id},
 };
@@ -22,11 +23,12 @@ use std::{
 pub const VERSION: u32 = 1;
 pub const LIMIT: usize = 65536;
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Operation {
     Status,
     Close,
+    RecordCheck { port: u16, check: TargetCheck },
 }
 
 #[derive(Deserialize, Serialize)]

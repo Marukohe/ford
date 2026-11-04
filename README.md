@@ -145,6 +145,26 @@ ford devbox 3000 --foreground
 
 Press Ctrl+C to close it.
 
+## Check a web app
+
+Run an HTTP check through an existing tunnel to update its `TARGET` result:
+
+```bash
+ford check web --port 8080 --http /
+ford check web --port 8080 --http / --expect-status 200
+ford list
+```
+
+Use any read-only path your app already serves. Without `--expect-status`, an HTTP response such as 401 or 404
+reports `reachable` and shows the status code. With an expected status, ford reports `ok` only when it matches.
+Timeouts and connection errors are also recorded. The command exits with a nonzero status on failure.
+
+`TARGET` shows the last result and its age for each checked port. It stays `unverified` until you run a check.
+You can omit `--port` for a session with one mapping. A failed check does not close the tunnel.
+
+Checks support plain HTTP and require `curl` and `lsof` on PATH. Restart sessions created by older versions of ford
+before checking them.
+
 ## Use your SSH configuration
 
 ford accepts SSH aliases, so you can keep usernames, custom SSH ports, keys, and jump hosts in `~/.ssh/config`.
@@ -165,9 +185,9 @@ the ports specified in your ford command.
 
 ## Troubleshooting
 
-**The session says `running`, but the page does not load.** `running` means the SSH process is alive. ford does not
-check whether the remote app is listening or serving HTTP, so the target is shown as `unverified`. Check the app on
-the server, confirm the port mapping, and run `ford logs web` for SSH errors.
+**The session says `running`, but the page does not load.** `running` means the SSH process is alive. Use
+`ford check web --http /` for a single HTTP mapping. Check the app on the server, confirm the port mapping, and run
+`ford logs web` for SSH errors.
 
 **Authentication or host key verification fails.** Try `ssh devbox` and resolve the SSH error there. ford needs key
 or agent authentication that works without a password or passphrase prompt.

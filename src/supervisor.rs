@@ -1,4 +1,5 @@
 use crate::{
+    check::TargetCheck,
     control::{self, Operation, Request, VERSION},
     error::{Error, Result},
     ssh::OwnedSsh,
@@ -323,7 +324,7 @@ fn run(
             }
             let until = Instant::now() + Duration::from_millis(150);
             while Instant::now() < until {
-                accept_requests(listener, session, None, &mut waiting)?;
+                accept_requests(paths, listener, session, None, None, &mut waiting)?;
                 wait_listener(listener, 25)?;
             }
             return Ok(if received_signal == SIGINT as usize {
@@ -352,7 +353,14 @@ fn run(
             }
         }
         let mut requested_close = false;
-        accept_requests(listener, session, Some(&mut requested_close), &mut waiting)?;
+        accept_requests(
+            paths,
+            listener,
+            session,
+            Some(ssh),
+            Some(&mut requested_close),
+            &mut waiting,
+        )?;
         if requested_close && session.state != Status::Closing {
             begin_close(paths, session, ssh, &mut deadline)?;
         }
@@ -375,8 +383,10 @@ fn begin_close(
 }
 
 fn accept_requests(
+    paths: &Paths,
     listener: &UnixListener,
-    session: &Session,
+    session: &mut Session,
+    ssh: Option<&OwnedSsh>,
     mut requested_close: Option<&mut bool>,
     waiting: &mut Vec<(UnixStream, Request)>,
 ) -> Result<()> {
@@ -401,6 +411,25 @@ fn accept_requests(
             continue;
         }
         match request.operation {
+            Operation::RecordCheck { port, ref check } => {
+                let result = if let Some(ssh) = ssh
+                    && session.state == Status::Running
+                    && !requested_close.as_deref().copied().unwrap_or(false)
+                    && !ssh.exited()?
+                {
+                    record_check(paths, session, port, check)
+                } else {
+                    Err(Error::new(
+                        "session stopped before the target check could be recorded",
+                    ))
+                };
+                let _ = control::respond(
+                    &mut stream,
+                    &request,
+                    session,
+                    result.err().map(|error| error.to_string()),
+                );
+            }
             Operation::Close if requested_close.is_some() => {
                 if waiting.len() >= 64 {
                     let _ = control::respond(
@@ -419,6 +448,46 @@ fn accept_requests(
             }
         }
     }
+    Ok(())
+}
+
+fn record_check(
+    paths: &Paths,
+    session: &mut Session,
+    port: u16,
+    check: &TargetCheck,
+) -> Result<()> {
+    if !session.mappings.iter().any(|mapping| mapping.local == port) {
+        return Err(Error::new("target check does not match a session mapping"));
+    }
+    if session
+        .target_checks
+        .get(&port)
+        .is_some_and(|previous| previous.checked_at > check.checked_at)
+    {
+        return Ok(());
+    }
+    let mut updated = session.clone();
+    updated.target_checks.insert(port, check.clone());
+    updated.target = if updated.target_checks.len() == updated.mappings.len()
+        && updated
+            .target_checks
+            .values()
+            .all(|value| value.result() == check.result())
+    {
+        check.result().into()
+    } else {
+        "mixed".into()
+    };
+    updated.updated_at = state::now();
+    // Leave room for the control response envelope as well as the persisted record.
+    if serde_json::to_vec(&updated)?.len() > control::LIMIT - 256 {
+        return Err(Error::new(
+            "session record is too large to store this target check",
+        ));
+    }
+    paths.save(&updated)?;
+    *session = updated;
     Ok(())
 }
 

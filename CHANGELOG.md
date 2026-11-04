@@ -2,6 +2,12 @@
 
 Notable changes in each version of ford.
 
+## [Unreleased]
+
+### Added
+
+- Check an HTTP path through a tunnel with `ford check` and show the latest result per mapping in `ford list`.
+
 ## [0.1.0]
 
 ### Added

@@ -50,6 +50,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/health":
+            self.send_error(404)
+            return
+        if self.path == "/slow":
+            release = self.server.slow_release
+            self.server.slow_started.set()
+            release.wait(10)
+            return
         if self.path == "/ws":
             accept = base64.b64encode(hashlib.sha1(
                 (self.headers["Sec-WebSocket-Key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()
@@ -136,12 +144,15 @@ def main():
     ssh = shutil.which("ssh")
     sshd = shutil.which("sshd") or "/usr/sbin/sshd"
     assert ssh and Path(sshd).is_file(), "OpenSSH client, ssh-keygen, and sshd are required"
+    assert shutil.which("curl") and shutil.which("lsof"), "curl and lsof are required for target checks"
     report = {"checks": [], "benchmarks": [], "platform": os.uname().sysname,
               "ssh": subprocess.run([ssh, "-V"], capture_output=True, text=True).stderr.strip()}
     daemons = []
     daemon_logs = []
     foreground = None
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.slow_started = threading.Event()
+    server.slow_release = threading.Event()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     with tempfile.TemporaryDirectory(prefix=".ford-ssh-", dir=Path.home()) as tmp, ExitStack() as cleanup:
@@ -199,7 +210,10 @@ Host *
     StrictHostKeyChecking yes
 """)
         wrapper = root / "bin/ssh"
-        wrapper.write_text(f"#!/bin/sh\nexec {shlex.quote(ssh)} -F {shlex.quote(str(config))} \"$@\"\n")
+        wrapper.write_text(
+            '#!/bin/sh\nif [ "${FORD_TEST_NO_LISTENER:-}" = 1 ]; then exec sleep 300; fi\n'
+            f"exec {shlex.quote(ssh)} -F {shlex.quote(str(config))} \"$@\"\n"
+        )
         wrapper.chmod(0o700)
         env = dict(os.environ, HOME=str(root / "home"), XDG_RUNTIME_DIR=str(root / "run"),
                    XDG_STATE_HOME=str(root / "state"), PATH=f"{root / 'bin'}:{os.environ['PATH']}", LC_ALL="C")
@@ -233,12 +247,79 @@ Host *
             check("multi-port HTTP and WebSocket byte forwarding")
             web = state("web")
             assert web["state"] == "running" and web["target"] == "unverified"
-            ford("close", web["id"][:12])
+            assert ford("check", "web", "--http", "/", check=False).returncode == 2
+            assert ford("check", "web", "--port", local, "--http", "http://127.0.0.1/", check=False).returncode == 2
+            assert "reachable (HTTP 404)" in ford("check", "web", "--port", local, "--http", "/health").stdout
+            result = ford("check", "web", "--port", local, "--http", "/health", "--expect-status", 200, check=False)
+            assert result.returncode == 1, result
+            assert state("web")["target_checks"][str(local)]["result"] == "unexpected_status"
+            assert "ok (HTTP 200)" in ford("check", "web", "--port", second, "--http", "/", "--expect-status", 200).stdout
+            checks = state("web")["target_checks"]
+            assert checks[str(local)]["http_status"] == 404 and checks[str(second)]["http_status"] == 200
+            assert "checked" in ford("list").stdout
+            check("per-mapping HTTP results, missing health endpoint, and explicit expected status")
+
+            result = ford("check", "web", "--port", second, "--http", "/slow", check=False)
+            assert result.returncode == 1 and "timeout" in result.stdout, result
+            checks = state("web")["target_checks"]
+            assert checks[str(second)]["result"] == "timeout"
+            server.slow_release.set()
+            server.slow_release = threading.Event()
+            server.slow_started.clear()
+            check("a stalled HTTP endpoint records a timeout")
+
+            slow_check = subprocess.Popen(
+                [str(binary), "check", "web", "--port", str(second), "--http", "/slow"],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                assert server.slow_started.wait(3), "slow target did not receive the check"
+                assert state("web")["state"] == "running" and slow_check.poll() is None
+                ford("close", web["id"][:12])
+                stdout, stderr = slow_check.communicate(timeout=10)
+                assert slow_check.returncode == 1 and not stdout, (stdout, stderr)
+                assert state("web")["target_checks"] == checks, "a check in flight overwrote history after close"
+            finally:
+                server.slow_release.set()
+                stop_process(slow_check)
+            check("list and close work during a pending target check")
             wait_for(lambda: released(local) and released(second), "ports released after close")
             assert state("web")["state"] == "closed"
             if os.uname().sysname == "Linux":
                 wait_for(lambda: not alive(web["supervisor_pid"]) and not alive(web["ssh_pid"]), "process cleanup")
             check("live list, close by ID prefix, process cleanup, and port release")
+
+            local = free_port()
+            with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as app:
+                app_thread = threading.Thread(target=app.serve_forever, daemon=True)
+                app_thread.start()
+                try:
+                    ford("good", f"{local}:{app.server_port}", "--name", "stoppable")
+                    wait_for(lambda: fetch(local) == PAYLOAD, "stoppable target readiness")
+                    ford("check", "stoppable", "--http", "/", "--expect-status", 200)
+                    assert state("stoppable")["target"] == "ok"
+                finally:
+                    app.shutdown()
+                    app_thread.join()
+            result = ford("check", "stoppable", "--http", "/", check=False)
+            assert result.returncode == 1 and "connection error" in result.stdout, result
+            stopped = state("stoppable")
+            assert stopped["state"] == "running" and stopped["target"] == "connection_error"
+            ford("close", "stoppable")
+            check("stopping the remote app changes TARGET while SSH stays running")
+
+            # A live SSH substitute without a listener must not get credit for another service.
+            env["FORD_TEST_NO_LISTENER"] = "1"
+            try:
+                ford("good", f"{target}:{target}", "--name", "wrong-listener")
+            finally:
+                del env["FORD_TEST_NO_LISTENER"]
+            assert fetch(target) == PAYLOAD
+            result = ford("check", "wrong-listener", "--http", "/", check=False)
+            assert result.returncode == 1 and "owns listener" in result.stderr, result
+            assert state("wrong-listener")["target"] == "unverified"
+            ford("close", "wrong-listener")
+            check("an unrelated listener cannot verify a target")
 
             local = free_port()
             ford("jumped", f"{local}:{target}", "--name", "jump")

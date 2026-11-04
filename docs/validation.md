@@ -100,10 +100,18 @@ rustup target add aarch64-apple-darwin --toolchain 1.93.1
 cargo check --all-targets --target aarch64-apple-darwin
 ```
 
-The SSH script requires Python 3, ssh, ssh-keygen, and sshd. It creates private temporary configuration under the
-current
-user's home directory so sshd's strict directory checks remain enabled. It leaves existing SSH configuration and keys
-untouched. The benchmark mode uses Linux `/proc`; ordinary SSH checks do not require `/proc`.
+The SSH script requires Python 3, ssh, ssh-keygen, sshd, curl, and lsof. It creates a private temporary configuration
+under the current user's home directory so sshd's strict directory checks remain enabled. It leaves existing SSH
+settings and keys untouched. Benchmark mode uses Linux `/proc`; ordinary SSH checks do not require it.
 
 Automatic reconnection, orphan adoption after supervisor failure, native Windows support, and remote-health detection
 remain outside v0.1. See [design.md](design.md) for lifecycle and recovery boundaries.
+
+## Unreleased HTTP target checks
+
+The isolated real SSH suite covers successful responses, missing health paths, expected status mismatches, timeouts,
+and per-port results. It verifies that stopping the app leaves the session running, a different local listener cannot
+verify the target, and list and close remain responsive during a check. These checks run on Linux in CI.
+
+All 12 real SSH checks passed locally on Linux x86_64 with OpenSSH 9.6p1. The macOS ARM64 cross-Clippy check passed;
+native macOS execution of the HTTP checks has not been tested.
