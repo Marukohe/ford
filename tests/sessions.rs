@@ -36,19 +36,25 @@ impl Fixture {
         fs::write(
             &ssh,
             r#"#!/bin/sh
-printf '%s\n' "$@" > "$FORD_TEST_ARGS"
+# Publish fixture files only after their contents are complete.
+publish() {
+  fixture_file=$1
+  shift
+  printf '%s\n' "$@" > "$fixture_file.tmp" && mv "$fixture_file.tmp" "$fixture_file"
+}
 printf 'SSH fixture diagnostic\n' >&2
+publish "$FORD_TEST_ARGS" "$@"
 case "$FORD_TEST_MODE" in
   fail) exit 255 ;;
   orphan)
     sleep 300 &
-    printf '%s\n' "$!" > "$FORD_TEST_HELPER"
+    publish "$FORD_TEST_HELPER" "$!"
     exit 255
     ;;
   stubborn)
     trap '' TERM
     sleep 300 &
-    printf '%s\n' "$!" > "$FORD_TEST_HELPER"
+    publish "$FORD_TEST_HELPER" "$!"
     wait
     ;;
   logs)
