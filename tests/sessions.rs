@@ -390,6 +390,8 @@ fn unreachable_supervisor_is_never_closed_by_disk_pid() {
     let session = f.wait_state("lost", "running");
     let supervisor = session["supervisor_pid"].as_i64().unwrap() as i32;
     let ssh = session["ssh_pid"].as_i64().unwrap() as i32;
+    // The fixture publishes args after its startup diagnostic. Killing the reader earlier can SIGPIPE the fixture.
+    wait_for(|| f.root.path().join("args").exists());
     kill(Pid::from_raw(supervisor), Signal::SIGKILL).unwrap();
     let lost = f.wait_state("lost", "unreachable");
     assert_eq!(lost["cleanup_complete"], false);
