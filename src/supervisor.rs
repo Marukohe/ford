@@ -169,6 +169,9 @@ pub fn print_session(session: &Session) {
             .map(|n| format!(" ({n})"))
             .unwrap_or_default()
     );
+    if session.jump.is_some() {
+        println!("SSH route: {}", session.ssh_route());
+    }
     for mapping in &session.mappings {
         println!(
             "Requested: 127.0.0.1:{} -> {}:127.0.0.1:{}",

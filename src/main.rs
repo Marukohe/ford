@@ -81,7 +81,7 @@ fn execute() -> Result<i32> {
                         "{:<12} {:<16} {:<24} {:<24} {:<12} {}",
                         &session.id[..12],
                         session.name.as_deref().unwrap_or("-"),
-                        session.host,
+                        session.ssh_route(),
                         mappings,
                         session.state.label(),
                         session.target_label()

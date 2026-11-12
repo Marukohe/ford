@@ -163,7 +163,7 @@ def main():
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(root / name)], check=True)
         (root / "authorized_keys").write_text((root / "client.pub").read_text())
         (root / "authorized_keys").chmod(0o600)
-        ports = [free_port(), free_port()]
+        ports = [free_port(), free_port(), free_port()]
         for index, port in enumerate(ports):
             config = root / f"sshd-{index}.conf"
             config.write_text(f"""Port {port}
@@ -176,7 +176,7 @@ UsePAM no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
-AllowTcpForwarding {'yes' if index == 0 else 'no'}
+AllowTcpForwarding {'no' if index == 1 else 'yes'}
 MaxStartups 100
 LogLevel VERBOSE
 """)
@@ -197,15 +197,22 @@ Host noauth
     IdentityFile {root / 'wrong'}
 Host badkey
     UserKnownHostsFile {root / 'wrong_hosts'}
+Host 127.0.0.1
+    Port {ports[1]}
+Host internal jumped
+    Port {ports[2]}
+Host internal
+    ProxyCommand false
 Host jumped
     ProxyJump good
-Host good denied badkey jumped
+Host good denied badkey jumped internal 127.0.0.1
     IdentityFile {root / 'client'}
 Host *
     HostName 127.0.0.1
     User {pwd.getpwuid(os.getuid()).pw_name}
     Port {ports[0]}
     IdentitiesOnly yes
+    BatchMode yes
     UserKnownHostsFile {root / 'known_hosts'}
     StrictHostKeyChecking yes
 """)
@@ -332,6 +339,37 @@ Host *
             if helpers:
                 wait_for(lambda: all(not alive(pid) for pid in helpers), "jump helper cleanup")
             check("ProxyJump forwarding and helper cleanup")
+
+            # internal has no usable direct route in the fixture. -J must override ProxyCommand.
+            local = free_port()
+            ford("internal", f"{local}:{target}", "--name", "no-jump", check=False)
+            wait_for(lambda: failed("no-jump"), "target requires a jump host")
+            for name, jump_option, jump_host in [
+                ("jump-alias", "--jump", "good"),
+                ("jump-port", "-J", f"{pwd.getpwuid(os.getuid()).pw_name}@127.0.0.1:{ports[0]}"),
+            ]:
+                local = free_port()
+                ford("internal", f"{local}:{target}", jump_option, jump_host, "--name", name)
+                wait_for(lambda: fetch(local) == PAYLOAD, "explicit jump-host forwarding")
+                jumped = state(name)
+                assert jumped["jump"] == jump_host and jumped["host"] == "internal"
+                assert "ok (HTTP 200)" in ford("check", name, "--http", "/",
+                                               "--expect-status", 200).stdout
+                children_file = Path(f"/proc/{jumped['ssh_pid']}/task/{jumped['ssh_pid']}/children")
+                helpers = list(map(int, children_file.read_text().split())) if children_file.exists() else []
+                if children_file.exists():
+                    assert helpers, "expected an active SSH jump helper"
+                ford("close", name)
+                wait_for(lambda: released(local), "explicit jump port release")
+                if helpers:
+                    wait_for(lambda: all(not alive(pid) for pid in helpers), "explicit jump helper cleanup")
+            check("explicit jump alias and user@host:port reach a separate SSH server and clean up")
+
+            ford("internal", f"{free_port()}:{target}", "--jump", "noauth",
+                 "--name", "jump-noauth", check=False)
+            wait_for(lambda: failed("jump-noauth"), "jump authentication failure")
+            assert ford("logs", "jump-noauth").stdout.strip()
+            check("jump authentication failure retains SSH diagnostics")
 
             with socket.socket() as occupied:
                 occupied.bind(("127.0.0.1", 0))

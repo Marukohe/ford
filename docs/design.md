@@ -108,9 +108,9 @@ ford --help
 ford --version
 ```
 
-Creation syntax: `ford <HOST> <PORT|LOCAL:REMOTE>... [--name NAME] [--foreground]`. Also provide the explicit form `ford
-open <HOST> ...`. The names `open`, `list`, `close`, and `logs` are reserved subcommands. For SSH aliases with those
-names, use the explicit form, such as `ford open list 3000`.
+Creation syntax: `ford <HOST> <PORT|LOCAL:REMOTE>... [--jump HOST] [--name NAME] [--foreground]`. Also provide the
+explicit form `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, and `logs` are reserved subcommands.
+For an SSH alias with a reserved name, use the explicit form, such as `ford open list 3000`.
 
 - `HOST` accepts SSH configuration aliases, hostnames, IPv4 addresses, and `user@host`. Use an SSH configuration alias
   for IPv6 destinations in the first release to avoid introducing additional address syntax.
@@ -120,8 +120,12 @@ names, use the explicit form, such as `ford open list 3000`.
 - Do not bind and release a port in advance as an availability guarantee. The actual SSH bind determines the outcome.
   Report conflicts without silently choosing another port.
 - The OS determines permission to bind low-numbered ports. ford does not elevate privileges automatically.
-- Use SSH configuration for the login port, keys, and jump hosts. The first release does not pass through arbitrary SSH
-  arguments.
+- Use SSH configuration for target login ports, keys, and complex routes. `--jump` (`-J`) selects one SSH jump host,
+  accepting an alias, hostname, IPv4 address, or `user@host[:port]`. Use an SSH alias for IPv6 jump addresses.
+  This option is passed as one `ssh -J` argument and overrides configured `ProxyJump`/`ProxyCommand` routes.
+  Both the jump host and target require SSH access. The target remains the SSH destination, and port mappings still
+  address its `127.0.0.1`. No remote shell commands, configuration edits, or agent forwarding are needed.
+  ford does not pass through arbitrary SSH arguments.
 - Run in the background by default and return a session ID. `--foreground` streams logs to the terminal. Both modes
   support list/close from another terminal.
 - `--name` is optional; every session has a unique ID that is never reused. Restrict the name character set and never

@@ -198,6 +198,14 @@ fn invalid_input_has_no_side_effects() {
         vec!["devbox", "80", "80:90"],
         vec!["open", "bad;command", "3000"],
         vec!["devbox", "3000", "--name", "../bad"],
+        vec!["devbox", "3000", "--jump=-oProxyCommand=bad"],
+        vec!["devbox", "3000", "--jump", "bob@-bad"],
+        vec!["devbox", "3000", "--jump", "jump;bad"],
+        vec!["devbox", "3000", "--jump", "one,two"],
+        vec!["devbox", "3000", "--jump", "bastion:0"],
+        vec!["devbox", "3000", "--jump", "bastion:65536"],
+        vec!["devbox", "3000", "--jump", "bastion:"],
+        vec!["devbox", "3000", "--jump", "::1"],
     ] {
         assert_eq!(f.output(&args).status.code(), Some(2), "{args:?}");
     }
@@ -220,6 +228,27 @@ fn invalid_input_has_no_side_effects() {
     assert!(!f.output(&["close"]).status.success());
     f.ok(&["open", "list", "3000", "--name", "reserved"]);
     f.ok(&["close", "reserved"]);
+}
+
+#[test]
+fn jump_route_is_passed_to_ssh_and_retained_in_session_state() {
+    for (option, jump) in [("--jump", "bob@bastion:2222"), ("-J", "bastion")] {
+        let f = Fixture::new();
+        let output = f.ok(&["internal", "8080:3000", option, jump, "--name", "jump"]);
+        let route = format!("{jump} -> internal");
+        assert!(String::from_utf8_lossy(&output.stdout).contains(&format!("SSH route: {route}")));
+        let session = f.wait_state("jump", "running");
+        assert_eq!(session["host"], "internal");
+        assert_eq!(session["jump"], jump);
+        assert!(String::from_utf8_lossy(&f.ok(&["list"]).stdout).contains(&route));
+        wait_for(|| f.root.path().join("args").exists());
+        let args = fs::read_to_string(f.root.path().join("args")).unwrap();
+        assert!(args.contains(&format!("-J\n{jump}\n--\ninternal\n")));
+        assert!(args.contains("-L\n127.0.0.1:8080:127.0.0.1:3000\n"));
+        f.ok(&["close", "jump"]);
+        assert_eq!(f.session("jump")["jump"], jump);
+        assert_eq!(f.session("jump")["state"], "closed");
+    }
 }
 
 #[test]

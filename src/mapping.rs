@@ -67,6 +67,30 @@ pub fn validate_mappings(mappings: &[Mapping]) -> Result<(), String> {
     Ok(())
 }
 
+pub fn validate_jump(jump: &str) -> Result<(), String> {
+    let (host, port) = jump
+        .split_once(':')
+        .map_or((jump, None), |(host, port)| (host, Some(port)));
+    validate_host(host).map_err(
+        |_| "jump host must be an SSH alias, hostname, IPv4 address, or user@host[:port]",
+    )?;
+    if host
+        .rsplit('@')
+        .next()
+        .is_some_and(|name| name.starts_with('-'))
+    {
+        return Err("jump hostname cannot begin with '-'".into());
+    }
+    if let Some(port) = port
+        && (port.is_empty()
+            || !port.bytes().all(|byte| byte.is_ascii_digit())
+            || port.parse::<u16>().ok().is_none_or(|port| port == 0))
+    {
+        return Err("jump port must be a decimal integer in 1..=65535".into());
+    }
+    Ok(())
+}
+
 pub fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty()
         || name.len() > 64

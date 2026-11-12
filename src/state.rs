@@ -53,6 +53,8 @@ pub struct Session {
     pub id: String,
     pub name: Option<String>,
     pub host: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jump: Option<String>,
     pub mappings: Vec<Mapping>,
     pub state: Status,
     pub created_at: u64,
@@ -71,6 +73,13 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn ssh_route(&self) -> String {
+        match &self.jump {
+            Some(jump) => format!("{jump} -> {}", self.host),
+            None => self.host.clone(),
+        }
+    }
+
     pub fn terminal(&self) -> bool {
         matches!(self.state, Status::Closed | Status::Failed) && self.cleanup_complete
     }
@@ -338,6 +347,7 @@ impl Paths {
             id,
             name: open.name,
             host: open.host,
+            jump: open.jump,
             mappings: open.ports,
             state: Status::Starting,
             created_at: now(),

@@ -1,6 +1,6 @@
 use crate::{
     error::{Error, Result},
-    mapping::{Mapping, validate_host, validate_mappings, validate_name},
+    mapping::{Mapping, validate_host, validate_jump, validate_mappings, validate_name},
 };
 use clap::{Args, Parser, Subcommand};
 use std::ffi::OsString;
@@ -69,6 +69,9 @@ pub struct Open {
     pub ports: Vec<Mapping>,
     #[arg(long)]
     pub name: Option<String>,
+    /// SSH through a jump host: alias or user@host[:port]
+    #[arg(short = 'J', long, value_name = "HOST")]
+    pub jump: Option<String>,
     /// Stream logs and close on Ctrl+C instead of detaching
     #[arg(long)]
     pub foreground: bool,
@@ -78,6 +81,9 @@ impl Open {
     pub fn validate(&self) -> Result<()> {
         validate_host(&self.host).map_err(|e| Error::with_code(2, e))?;
         validate_mappings(&self.ports).map_err(|e| Error::with_code(2, e))?;
+        if let Some(jump) = &self.jump {
+            validate_jump(jump).map_err(|e| Error::with_code(2, e))?;
+        }
         if let Some(name) = &self.name {
             validate_name(name).map_err(|e| Error::with_code(2, e))?;
         }

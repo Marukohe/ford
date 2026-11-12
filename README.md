@@ -122,6 +122,28 @@ ford devbox 3000 5173 8080:8000 --name dev
 
 If a local port is already in use, choose another one, such as `8081:3000`.
 
+## Reach a server through a jump host
+
+When the target server is reachable only through another SSH machine, use `--jump` (or `-J`):
+
+```bash
+ford internal-server 8080:3000 --jump bastion --name web
+```
+
+Open `http://127.0.0.1:8080` locally to reach port 3000 on `internal-server`. ford connects through `bastion` and
+logs into `internal-server`; both machines need SSH access. The jump host must be able to reach the target's SSH port.
+Your local SSH keys or agent authenticate both connections.
+
+You can use an SSH alias for the jump host or specify its username and SSH port:
+
+```bash
+ford alice@internal.example 8080:3000 -J bob@bastion.example:2222 --name web
+```
+
+`ford list` shows the route, and the session uses the same `check`, `logs`, and `close` commands. Use SSH configuration
+for each machine's keys and target login port. Existing `ProxyJump` settings still work; an explicit `--jump` overrides
+them. Each `--jump` accepts one host; use an SSH alias for an IPv6 jump address.
+
 ## Manage your tunnels
 
 ```bash

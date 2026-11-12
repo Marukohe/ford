@@ -7,6 +7,7 @@ Notable changes in each version of ford.
 ### Added
 
 - Check an HTTP path through a tunnel with `ford check` and show the latest result per mapping in `ford list`.
+- Reach a target SSH server through an explicit jump host with `--jump` (`-J`), including a custom jump login port.
 
 ## [0.1.0]
 
