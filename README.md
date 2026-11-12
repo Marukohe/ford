@@ -52,8 +52,8 @@ Choose the compiled archive rather than GitHub's source-code downloads:
 For example, after downloading the Linux x86_64 archive and `SHA256SUMS` from the same release:
 
 ```bash
-grep '  ford-v0.1.0-x86_64-unknown-linux-gnu.tar.gz$' SHA256SUMS | sha256sum --check
-tar -xzf ford-v0.1.0-x86_64-unknown-linux-gnu.tar.gz ford
+grep '  ford-v0.2.0-x86_64-unknown-linux-gnu.tar.gz$' SHA256SUMS | sha256sum --check
+tar -xzf ford-v0.2.0-x86_64-unknown-linux-gnu.tar.gz ford
 mkdir -p "$HOME/.local/bin"
 install -m 755 ford "$HOME/.local/bin/ford"
 export PATH="$HOME/.local/bin:$PATH"

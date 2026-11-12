@@ -2,12 +2,21 @@
 
 Notable changes in each version of ford.
 
-## [Unreleased]
+## [0.2.0]
 
 ### Added
 
 - Check an HTTP path through a tunnel with `ford check` and show the latest result per mapping in `ford list`.
 - Reach a target SSH server through an explicit jump host with `--jump` (`-J`), including a custom jump login port.
+
+### Changed
+
+- Show a progress bar while the installer downloads a release archive.
+
+### Upgrade Notes
+
+- HTTP target checks require `curl` and `lsof` on PATH.
+- Restart sessions created by v0.1.0 before using `ford check`. Target checks are on demand.
 
 ## [0.1.0]
 
