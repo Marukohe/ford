@@ -88,6 +88,15 @@ def fetch(port, path="/"):
         return response.read()
 
 
+def proxy_fetch(proxy, target, path="/"):
+    result = subprocess.run(
+        ["curl", "--disable", "--noproxy", "", "--proxy", f"socks5h://127.0.0.1:{proxy}",
+         "--max-time", "3", "--silent", "--show-error", f"http://localhost:{target}{path}"],
+        capture_output=True, timeout=5,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
 def websocket(port):
     with socket.create_connection(("127.0.0.1", port), timeout=2) as sock:
         key = base64.b64encode(b"ford-test-key-123").decode()
@@ -177,6 +186,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
 AllowTcpForwarding {'no' if index == 1 else 'yes'}
+GatewayPorts no
 MaxStartups 100
 LogLevel VERBOSE
 """)
@@ -488,6 +498,56 @@ Host *
             ford("close", "reconnect")
             wait_for(lambda: released(local), "reconnected session port release")
             check("reconnection rejects stale target checks and accepts a fresh observation")
+
+            local, proxy = free_port(), free_port()
+            ford("internal", f"{local}:{target}", "--socks", proxy, "--jump", "good", "--name", "socks")
+            wait_for(lambda: proxy_fetch(proxy, target) == PAYLOAD, "local SOCKS through a jump host")
+            assert proxy_fetch(proxy, target, "/bulk") == BULK
+            wait_for(lambda: fetch(local) == PAYLOAD, "fixed mapping alongside SOCKS")
+            ford("check", "socks", "--http", "/", "--expect-status", 200)
+            assert state("socks")["target"] == "mixed"
+            assert f"socks:{proxy}: unverified" in ford("list").stdout
+            assert ford("check", "socks", "--port", proxy, "--http", "/", check=False).returncode == 2
+            ford("close", "socks")
+            wait_for(lambda: released(proxy) and released(local), "local SOCKS and fixed port release")
+            check("local SOCKS resolves a requested hostname through SSH and carries HTTP and binary payloads")
+            check("mixed sessions keep SOCKS health unverified after a successful fixed-mapping check")
+
+            proxy = free_port()
+            ford("good", "--reverse-socks", proxy, "--retry=2", "--name", "reverse")
+            wait_for(lambda: proxy_fetch(proxy, target) == PAYLOAD, "reverse SOCKS forwarding")
+            assert proxy_fetch(proxy, target, "/bulk") == BULK
+            original = state("reverse")
+            assert original["target"] == "unverified" and original["mappings"] == []
+            assert ford("check", "reverse", "--http", "/", check=False).returncode == 2
+            ford("group", "save", "proxy-group", "reverse")
+            os.kill(original["ssh_pid"], signal.SIGKILL)
+            wait_for(lambda: state("reverse").get("retry_count") == 1
+                     and proxy_fetch(proxy, target) == PAYLOAD, "reverse SOCKS reconnection")
+            assert state("reverse")["id"] == original["id"]
+            assert state("reverse")["supervisor_pid"] == original["supervisor_pid"]
+            ford("group", "close", "proxy-group")
+            wait_for(lambda: released(proxy), "reconnected reverse SOCKS port release")
+            ford("group", "open", "proxy-group")
+            wait_for(lambda: proxy_fetch(proxy, target) == PAYLOAD, "saved reverse SOCKS restoration")
+            assert "already running 1" in ford("group", "open", "proxy-group").stdout
+            ford("group", "close", "proxy-group")
+            wait_for(lambda: released(proxy), "restored reverse SOCKS port release")
+            ford("group", "remove", "proxy-group")
+            check("reverse SOCKS carries requests, reconnects, and restores from a saved group")
+
+            with socket.socket() as occupied:
+                occupied.bind(("127.0.0.1", 0))
+                occupied.listen()
+                port = occupied.getsockname()[1]
+                ford("good", "--reverse-socks", port, "--name", "reverse-busy", check=False)
+                wait_for(lambda: failed("reverse-busy"), "reverse SOCKS remote bind conflict")
+                assert ford("logs", "reverse-busy").stdout.strip()
+            port = free_port()
+            ford("denied", "--reverse-socks", port, "--name", "reverse-denied", check=False)
+            wait_for(lambda: failed("reverse-denied"), "remote forwarding denied")
+            assert ford("logs", "reverse-denied").stdout.strip() and released(port)
+            check("reverse SOCKS remote bind conflicts and forwarding denial retain SSH failures")
 
             local = free_port()
             foreground = subprocess.Popen([str(binary), "good", f"{local}:{target}", "--name", "fg",

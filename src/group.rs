@@ -1,7 +1,7 @@
 use crate::{
     cli::{GroupCommand, Open},
     error::{Error, Result},
-    mapping::{Mapping, validate_name},
+    mapping::{self, Mapping, validate_name},
     state::{self, Paths, Session, Status},
     supervisor,
 };
@@ -31,6 +31,10 @@ struct Group {
 struct SavedSession {
     host: String,
     mappings: Vec<Mapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    socks: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    reverse_socks: Vec<u16>,
     name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     jump: Option<String>,
@@ -43,6 +47,8 @@ impl SavedSession {
         Self {
             host: session.host,
             mappings: session.mappings,
+            socks: session.socks,
+            reverse_socks: session.reverse_socks,
             name: session.name,
             jump: session.jump,
             retry: session.retry,
@@ -53,6 +59,8 @@ impl SavedSession {
         Open {
             host: self.host.clone(),
             ports: self.mappings.clone(),
+            socks: self.socks.clone(),
+            reverse_socks: self.reverse_socks.clone(),
             name: self.name.clone(),
             jump: self.jump.clone(),
             retry: self.retry,
@@ -65,6 +73,13 @@ impl SavedSession {
             && self.name == session.name
             && self.jump == session.jump
             && self.retry.unwrap_or(0) == session.retry.unwrap_or(0)
+            && self.socks.len() == session.socks.len()
+            && self.socks.iter().all(|port| session.socks.contains(port))
+            && self.reverse_socks.len() == session.reverse_socks.len()
+            && self
+                .reverse_socks
+                .iter()
+                .all(|port| session.reverse_socks.contains(port))
             && self.mappings.len() == session.mappings.len()
             && self
                 .mappings
@@ -86,6 +101,7 @@ impl Group {
         }
         let mut names = HashSet::new();
         let mut ports = HashSet::new();
+        let mut remote_ports = HashSet::new();
         for session in &self.sessions {
             session.open().validate()?;
             // Leave room for lifecycle metadata and the startup protocol envelope when reopening.
@@ -99,11 +115,16 @@ impl Group {
                     "duplicate session name in group: {name}"
                 )));
             }
-            for mapping in &session.mappings {
-                if !ports.insert(mapping.local) {
+            for port in mapping::local_ports(&session.mappings, &session.socks) {
+                if !ports.insert(port) {
+                    return Err(Error::new(format!("duplicate local port in group: {port}")));
+                }
+            }
+            for port in &session.reverse_socks {
+                if !remote_ports.insert((session.host.as_str(), *port)) {
                     return Err(Error::new(format!(
-                        "duplicate local port in group: {}",
-                        mapping.local
+                        "duplicate reverse SOCKS port in group: {}:{port}",
+                        session.host
                     )));
                 }
             }
@@ -244,12 +265,8 @@ pub fn run(command: GroupCommand) -> Result<i32> {
                     Some(jump) => format!("{jump} -> {}", saved.host),
                     None => saved.host,
                 };
-                let mappings = saved
-                    .mappings
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",");
+                let mappings =
+                    mapping::describe(&saved.mappings, &saved.socks, &saved.reverse_socks);
                 let retry = saved
                     .retry
                     .map_or(String::new(), |limit| format!("  retry={limit}"));
@@ -348,12 +365,15 @@ fn open(paths: &Paths, group: &Group) -> Result<i32> {
             skipped += 1;
         } else if let Some(session) = active.iter().find(|session| {
             (saved.name.is_some() && saved.name == session.name)
-                || saved.mappings.iter().any(|mapping| {
-                    session
-                        .mappings
-                        .iter()
-                        .any(|existing| existing.local == mapping.local)
+                || mapping::local_ports(&saved.mappings, &saved.socks).any(|port| {
+                    mapping::local_ports(&session.mappings, &session.socks)
+                        .any(|existing| existing == port)
                 })
+                || (saved.host == session.host
+                    && saved
+                        .reverse_socks
+                        .iter()
+                        .any(|port| session.reverse_socks.contains(port)))
         }) {
             return Err(Error::new(format!(
                 "group {} conflicts with session {}; close or resolve it before reopening the group",

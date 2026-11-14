@@ -178,6 +178,23 @@ pub fn print_session(session: &Session) {
             mapping.local, session.host, mapping.remote
         );
     }
+    for port in &session.socks {
+        println!(
+            "Requested: local SOCKS 127.0.0.1:{port} -> egress via {}",
+            session.host
+        );
+    }
+    for port in &session.reverse_socks {
+        println!(
+            "Requested: reverse SOCKS {}:127.0.0.1:{port} -> egress via this machine",
+            session.host
+        );
+    }
+    if !session.reverse_socks.is_empty() {
+        println!(
+            "Remote bind depends on sshd policy: GatewayPorts must be no or clientspecified, not yes."
+        );
+    }
     let detail = match session.state {
         Status::Running => "SSH process alive; forwarding unverified",
         Status::Retrying => "waiting to restart SSH; forwarding unverified",
@@ -590,7 +607,9 @@ fn record_check(
     }
     let mut updated = session.clone();
     updated.target_checks.insert(port, check.clone());
-    updated.target = if updated.target_checks.len() == updated.mappings.len()
+    updated.target = if updated.socks.is_empty()
+        && updated.reverse_socks.is_empty()
+        && updated.target_checks.len() == updated.mappings.len()
         && updated
             .target_checks
             .values()

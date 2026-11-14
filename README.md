@@ -5,6 +5,9 @@ Access remote web apps, dashboards, and APIs from your own machine through SSH.
 ford brings a remote port to `localhost` and keeps the tunnel running in the background. Give each tunnel a name,
 list your sessions, and close them when you are done.
 
+You can also proxy selected outbound requests through another machine, including when that machine must initiate
+the SSH connection back to you.
+
 ```bash
 ford user@server 8080:3000 --name web
 # Open http://127.0.0.1:8080 in your browser
@@ -144,6 +147,61 @@ ford alice@internal.example 8080:3000 -J bob@bastion.example:2222 --name web
 for each machine's keys and target login port. Existing `ProxyJump` settings still work; an explicit `--jump` overrides
 them. Each `--jump` accepts one host; use an SSH alias for an IPv6 jump address.
 
+## Send requests through another machine
+
+SOCKS proxies let an application choose which requests use another machine's network connection. HTTP and HTTPS
+traffic passes through without changing headers or intercepting TLS. Only applications configured to use the proxy
+are affected; ford does not change your system routing or proxy settings.
+
+### Connect to the machine you want to exit through
+
+If `server` can SSH into `server1`, run this **on `server`**:
+
+```bash
+ford server1 --socks 1080 --name outbound --retry
+curl --proxy socks5h://127.0.0.1:1080 https://example.com
+```
+
+The SOCKS listener is on `server`; selected requests exit through `server1`. With `socks5h`, destination hostnames
+are also resolved on `server1`.
+
+### Let the exit machine connect back to you
+
+If only `server1` can SSH into `server`, run this **on `server1`**:
+
+```bash
+ford server --reverse-socks 1080 --name outbound --retry
+```
+
+Then run this **on `server`**:
+
+```bash
+curl --proxy socks5h://127.0.0.1:1080 https://example.com
+```
+
+The SOCKS listener is on `server`; requests and destination DNS lookups exit through `server1`. Run `ford list`,
+`ford logs outbound`, and `ford close outbound` on `server1`, where the supervisor runs. No ford installation is
+needed on `server`.
+
+Reverse SOCKS requires an OpenSSH client that supports dynamic remote forwarding and a server that permits remote
+TCP forwarding. The remote SSH server must use `GatewayPorts no` (the default) or `clientspecified`.
+`GatewayPorts yes` forces wildcard binding even when loopback is requested; ford cannot verify the server's actual
+bind address. Configure that policy before using reverse SOCKS. See the
+[OpenSSH server documentation](https://man.openbsd.org/sshd_config#GatewayPorts).
+
+Both modes request `127.0.0.1` listeners and support `--jump`, `--foreground`, `--retry`, and saved groups. Repeat
+the options for multiple proxy ports, or combine them with fixed mappings:
+
+```bash
+ford devbox 8080:3000 --socks 1080 --reverse-socks 1081 --name work
+ford group save work-group work
+```
+
+Proxy URLs must use SOCKS, such as `socks5h://127.0.0.1:1080`; this is not an HTTP CONNECT proxy endpoint.
+`ford check` checks fixed local mappings only. SOCKS entries remain `unverified`; test them with your application's
+proxy setting or `curl --proxy`. OpenSSH implements both forwarding modes; see its
+[`-D` and `-R` documentation](https://man.openbsd.org/ssh).
+
 ## Manage your tunnels
 
 ```bash
@@ -210,10 +268,10 @@ ford group close work
 ford group open work
 ```
 
-A group keeps the hosts, port mappings, session names, jump hosts, and retry limits. `group open` creates new background
-sessions with fresh retry budgets and skips matching sessions that are already running or retrying. Other sessions
-are left alone. Known name or port conflicts
-must be resolved first; an unreachable session is never replaced automatically.
+A group keeps the hosts, fixed mappings, SOCKS ports and directions, session names, jump hosts, and retry limits.
+`group open` creates new background sessions with fresh retry budgets and skips matching sessions that are already
+running or retrying. Other sessions are left alone. Known name or port conflicts must be resolved first;
+an unreachable session is never replaced automatically.
 
 ```bash
 ford group save work --all --force   # Replace the group with all running or retrying sessions
@@ -241,7 +299,8 @@ ford list
 
 Use any read-only path your app already serves. Without `--expect-status`, an HTTP response such as 401 or 404
 reports `reachable` and shows the status code. With an expected status, ford reports `ok` only when it matches.
-Timeouts and connection errors are also recorded. The command exits with a nonzero status on failure.
+Timeouts and connection errors are also recorded. The command exits with a nonzero status on failure. For a mixed
+session, this checks only its fixed mappings; proxy ports are not HTTP endpoints for this command.
 
 `TARGET` shows the last result and its age for each checked port. It stays `unverified` until you run a check.
 You can omit `--port` for a session with one mapping. A failed check does not close the tunnel.

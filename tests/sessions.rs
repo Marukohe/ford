@@ -203,6 +203,19 @@ fn background_list_arguments_close_and_name_reuse() {
 fn invalid_input_has_no_side_effects() {
     let f = Fixture::new();
     for args in [
+        vec!["devbox"],
+        vec!["devbox", "--socks", "0"],
+        vec!["devbox", "--reverse-socks", "65536"],
+        vec!["devbox", "--socks", "1080:80"],
+        vec!["devbox", "1080:80", "--socks", "1080"],
+        vec!["devbox", "--socks", "1080", "--socks", "1080"],
+        vec![
+            "devbox",
+            "--reverse-socks",
+            "1080",
+            "--reverse-socks",
+            "1080",
+        ],
         vec!["devbox", "0"],
         vec!["devbox", "65536"],
         vec!["devbox", "80", "80:90"],
@@ -968,4 +981,131 @@ fn foreground_interrupt_cancels_retry_backoff() {
     let closed = f.session("fg-retry");
     assert_eq!(closed["state"], "closed");
     assert_eq!(closed["cleanup_complete"], true);
+}
+
+#[test]
+fn socks_arguments_and_groups_preserve_direction_and_lifecycle() {
+    let f = Fixture::new();
+    let output = f.ok(&[
+        "internal",
+        "8080:3000",
+        "--socks",
+        "1080",
+        "--socks",
+        "1081",
+        "--reverse-socks",
+        "2080",
+        "--jump",
+        "bastion",
+        "--retry=2",
+        "--name",
+        "proxy",
+    ]);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("local SOCKS 127.0.0.1:1080 -> egress via internal"));
+    assert!(text.contains("reverse SOCKS internal:127.0.0.1:2080 -> egress via this machine"));
+    assert!(text.contains("GatewayPorts"));
+    wait_for(|| f.root.path().join("args").exists());
+    let args = fs::read_to_string(f.root.path().join("args")).unwrap();
+    for expected in [
+        "-L\n127.0.0.1:8080:127.0.0.1:3000\n",
+        "-D\n127.0.0.1:1080\n-D\n127.0.0.1:1081\n",
+        "-R\n127.0.0.1:2080\n",
+        "-J\nbastion\n--\ninternal\n",
+    ] {
+        assert!(args.contains(expected), "{args}");
+    }
+    let original = f.session("proxy");
+    assert_eq!(original["socks"], serde_json::json!([1080, 1081]));
+    assert_eq!(original["reverse_socks"], serde_json::json!([2080]));
+    let listing = f.ok(&["list"]);
+    assert!(
+        String::from_utf8_lossy(&listing.stdout)
+            .contains("socks:1080,socks:1081,reverse-socks:2080")
+    );
+    assert_eq!(
+        f.output(&["check", "proxy", "--port", "1080", "--http", "/"])
+            .status
+            .code(),
+        Some(2)
+    );
+    f.ok(&["group", "save", "proxies", "proxy"]);
+    assert!(
+        String::from_utf8_lossy(&f.ok(&["group", "show", "proxies"]).stdout)
+            .contains("reverse-socks:2080")
+    );
+    f.ok(&["group", "close", "proxies"]);
+    f.ok(&["group", "open", "proxies"]);
+    let restored = f
+        .sessions()
+        .into_iter()
+        .find(|s| s["state"] == "running")
+        .unwrap();
+    assert_ne!(restored["id"], original["id"]);
+    assert_eq!(restored["socks"], original["socks"]);
+    assert_eq!(restored["reverse_socks"], original["reverse_socks"]);
+    assert_eq!(restored["retry"], 2);
+    assert!(
+        String::from_utf8_lossy(&f.ok(&["group", "open", "proxies"]).stdout)
+            .contains("already running 1")
+    );
+    f.ok(&["group", "close", "proxies"]);
+}
+
+#[test]
+fn proxy_only_sessions_keep_target_unverified_and_reject_fixed_http_checks() {
+    let f = Fixture::new();
+    f.ok(&[
+        "devbox",
+        "--socks",
+        "1080",
+        "--reverse-socks",
+        "1080",
+        "--name",
+        "proxy-only",
+    ]);
+    let session = f.session("proxy-only");
+    assert_eq!(session["mappings"], serde_json::json!([]));
+    assert_eq!(session["target"], "unverified");
+    let check = f.output(&["check", "proxy-only", "--http", "/"]);
+    assert_eq!(check.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&check.stderr).contains("requires a fixed local port mapping"));
+    f.ok(&["close", "proxy-only"]);
+    assert_eq!(f.session("proxy-only")["cleanup_complete"], true);
+}
+
+#[test]
+fn proxy_groups_distinguish_local_and_remote_listener_conflicts() {
+    let f = Fixture::new();
+    f.ok(&["devbox", "--socks", "1080", "--name", "local"]);
+    f.ok(&["devbox", "--reverse-socks", "1080", "--name", "remote"]);
+    f.ok(&["other", "--reverse-socks", "1080", "--name", "other"]);
+    f.ok(&["group", "save", "valid", "local", "remote", "other"]);
+    f.ok(&["devbox", "1080:80", "--name", "local-conflict"]);
+    assert!(
+        !f.output(&["group", "save", "bad-local", "local", "local-conflict"])
+            .status
+            .success()
+    );
+    f.ok(&[
+        "devbox",
+        "--reverse-socks",
+        "1080",
+        "--name",
+        "remote-conflict",
+    ]);
+    assert!(
+        !f.output(&["group", "save", "bad-remote", "remote", "remote-conflict"])
+            .status
+            .success()
+    );
+    f.ok(&["group", "close", "valid"]);
+    let before = f.sessions().len();
+    assert!(!f.output(&["group", "open", "valid"]).status.success());
+    assert_eq!(f.sessions().len(), before);
+    f.ok(&["close", "local-conflict"]);
+    assert!(!f.output(&["group", "open", "valid"]).status.success());
+    assert_eq!(f.sessions().len(), before);
+    f.ok(&["close", "remote-conflict"]);
+    f.ok(&["group", "open", "valid"]);
 }

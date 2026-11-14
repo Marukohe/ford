@@ -75,6 +75,12 @@ impl TargetCheck {
 }
 
 pub fn run(paths: &Paths, stored: &Session, args: &Check) -> Result<i32> {
+    if stored.mappings.is_empty() {
+        return Err(Error::with_code(
+            2,
+            "ford check requires a fixed local port mapping; test SOCKS with curl --proxy socks5h://HOST:PORT URL",
+        ));
+    }
     if !args.http.starts_with('/')
         || args.http.len() > 2048
         || !args.http.bytes().all(|b| b.is_ascii_graphic() && b != b'#')

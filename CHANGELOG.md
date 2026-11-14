@@ -4,6 +4,13 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+### Added
+
+- Proxy selected outbound requests through an SSH host with `--socks PORT`.
+- Expose a SOCKS proxy on an SSH host with `--reverse-socks PORT`, using the machine running ford as the exit.
+- Save and restore SOCKS ports and directions in groups, with separate local and remote port conflict checks.
+- Manage proxy sessions with the existing list, close, logs, jump hosts, and bounded reconnection options.
+
 ## [0.3.0]
 
 ### Added

@@ -1,6 +1,7 @@
 # ford Design
 
-Status: implemented through v0.3, including saved groups and bounded reconnection.
+Status: implemented through v0.3, including saved groups and bounded reconnection. SOCKS forwarding is implemented
+for the next release.
 Updated: 2026-11-14. The architecture uses spawn with a Rust supervisor. Historical platform checks are recorded in
 [validation.md](validation.md); they do not establish validation of later changes.
 
@@ -60,7 +61,7 @@ ford CLI ──create──→ ford session supervisor ──spawn──→ ssh 
 Web traffic: browser → ssh → remote service; bypasses Rust
 ```
 
-Each active session has one Rust supervisor and at most one direct SSH child process. Multiple ports within it share
+Each active session has one Rust supervisor and at most one direct SSH child process. Fixed and SOCKS ports share
 the SSH connection. The supervisor owns the `Child` handle, live state, and control socket, and explicitly waits for,
 terminates, and reaps SSH.[1]
 
@@ -108,7 +109,8 @@ ford --help
 ford --version
 ```
 
-Creation syntax: `ford <HOST> <PORT|LOCAL:REMOTE>... [--jump HOST] [--name NAME] [--retry[=N]] [--foreground]`.
+Creation syntax: `ford <HOST> [PORT|LOCAL:REMOTE...] [--socks PORT] [--reverse-socks PORT] [--jump HOST]`
+`[--name NAME] [--retry[=N]] [--foreground]`. At least one fixed mapping or SOCKS listener is required.
 The explicit form is `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, `group`, and `logs` are
 reserved.
 For an SSH alias with a reserved name, use the explicit form, such as `ford open list 3000`.
@@ -133,6 +135,11 @@ For an SSH alias with a reserved name, use the explicit form, such as `ford open
   use names to construct paths. Reject an active name conflict for the current user instead of overwriting the session.
 - `--retry` enables up to five SSH restarts; `--retry=N` selects 0 through 100. Absence or zero disables retrying.
   Browser opening, automatic port selection, and LAN binding options remain outside the current implementation.
+- `--socks PORT` requests a local SOCKS listener whose connections exit through the final SSH host.
+  `--reverse-socks PORT` requests a listener on that host whose connections exit through the machine running ford.
+  Both options are repeatable, accept decimal ports in `1..=65535`, and may coexist with fixed mappings.
+  Fixed local and local SOCKS
+  listeners share a port namespace. Reverse SOCKS ports have a separate namespace on the SSH host.
 
 Example background creation output:
 
@@ -203,6 +210,29 @@ SSH configuration is trusted user configuration. Directives such as `ProxyComman
 configured programs. ford neither interpolates the supplied host into a command string nor modifies that configuration.
 
 ## 5. State, Failures, and Lifecycle
+
+### SOCKS Forwarding
+
+Use OpenSSH `-D 127.0.0.1:PORT` for local SOCKS and `-R 127.0.0.1:PORT` without a fixed destination for reverse SOCKS.
+OpenSSH implements SOCKS negotiation, DNS resolution, and byte forwarding. Rust only supervises the child. No new
+dependencies, remote commands, or remote ford installation are required. These are application-selected SOCKS proxies,
+not an HTTP CONNECT server, URL-based reverse proxy, or a system routing change.[2]
+
+For reverse SOCKS, the SSH client must support dynamic remote forwarding, and the server must permit remote TCP
+forwarding. Require server `GatewayPorts no` or `clientspecified`: `yes` forces a wildcard listener regardless of the
+requested loopback address. Display this prerequisite at creation because the client cannot verify the remote bind
+address. Do not claim actual remote exposure or listener establishment from process liveness.[5]
+
+Startup and list output distinguish `socks:PORT` from `reverse-socks:PORT`. Display the SSH host and which side provides
+egress. Reuse the same retry and shutdown lifecycle; retries recreate all requested listeners with unchanged arguments.
+Remote listener removal is performed by sshd when its connection closes; ford confirms the owned local child has been
+reaped, not remote cleanup over a broken connection. The server's keepalive policy determines cleanup of an orphaned
+remote listener after a network partition. A subsequent remote bind conflict remains visible as an SSH failure.
+
+Persist optional `socks` and `reverse_socks` port arrays, omitted when empty. Existing fixed-mapping records and groups
+remain readable. SOCKS has no single target to probe: reject `ford check` for proxy-only sessions and proxy ports.
+In mixed sessions, record HTTP results only for fixed mappings, keeping proxy health `unverified` and the aggregate
+result `mixed` once fixed mappings are checked. Users test selected destinations through a SOCKS-aware application.
 
 ### Lifecycle States
 
@@ -425,20 +455,22 @@ replacement.
 `group list [--json]` and `group show NAME` inspect saved groups; `group remove NAME` deletes a group without closing
 its sessions. Group names follow session-name validation.
 
-Groups contain a schema version, name, save timestamp, and saved sessions. Each entry contains only its SSH host,
-port mappings, optional session name, optional jump host, and optional retry limit. Process IDs, session IDs, retry
-counters, logs, and health observations are excluded. Reopening uses the current SSH configuration and creates fresh
-session IDs and retry budgets.
+Groups contain a schema version, name, save timestamp, and saved sessions. Each entry contains its SSH host, fixed
+mappings, SOCKS port arrays and their direction, optional session name, optional jump host, and optional retry limit.
+Process IDs, session IDs, retry counters, logs, and health observations are excluded. Reopening uses the current SSH
+configuration and creates fresh session IDs and retry budgets.
 
 Store groups under the private state directory in `groups/NAME.json`. Use owner-only files, reject symlinks and unsafe
 ownership or permissions, and publish updates by atomic rename. Limit group files to 64 KiB and each saved session
 configuration to 32 KiB, leaving room for lifecycle metadata and protocol envelopes. Revalidate all fields on read.
 Reject empty groups, duplicate session names, and overlapping local ports within a group.
+Local SOCKS and fixed mappings share this local namespace. Reject duplicate reverse SOCKS ports for the same SSH host
+string, while allowing the same port on different hosts or on opposite sides. Alias equivalence is not inferred.
 
 `ford group open NAME` queries current sessions before launching anything. Matching running or retrying configurations
-are reused; names, host, jump host, retry limits, and mappings must match. Known conflicting names or local ports,
-and matching unreachable/closing sessions, cause an error before new sessions are created. SSH still determines actual
-bind success.
+are reused; names, host, jump host, retry limits, fixed mappings, and SOCKS ports and directions must match.
+Known conflicting names, local ports, or reverse SOCKS ports on the same host, and matching unreachable/closing
+sessions cause an error before new sessions are created. SSH still determines actual bind success.
 New sessions launch independently; synchronous launch errors are reported with a nonzero aggregate exit code, and
 successful launches remain running. SSH can fail after startup acknowledgment; report that through ordinary session
 state and logs. This is not an atomic transaction or automatic orphan recovery.
@@ -462,6 +494,9 @@ anonymous mappings; different groups can launch independently and ordinary SSH b
 - **Stage: v0.3**
   - Scope: Saved mapping groups and bounded `--retry`
   - Requirements: Preserve ownership, cancel retries promptly, and invalidate checks across attempts
+- **Stage: Next release**
+  - Scope: Local and reverse SOCKS forwarding through OpenSSH
+  - Requirements: Distinguish listener sides and egress, keep checks truthful, and document remote bind policy
 - **Stage: Future options**
   - Scope: Optional `--open`, remote target address, local bind options, and periodic checks
   - Requirements: Define exposure boundaries and health policies before implementation
@@ -493,6 +528,8 @@ levels:
    failures, and forwarding permission restrictions. Check process reaping, port release, and ordinary jump-child
    cleanup after foreground interruption and background close. Do not bypass configuration by disabling host key
    verification.
+   For SOCKS, verify hostname requests and binary HTTP payloads, coexistence with fixed mappings, reverse listener
+   bind failures, forwarding denial, reconnection, saved-group restoration, and release of both listener types.
 
 Default tests must not require personal host aliases or public network access. Report Linux and macOS validation
 separately. Static inspection or a test on one platform does not establish cross-platform success.
@@ -522,8 +559,9 @@ not be removed to reduce initial scope or overhead.
 
 The implementation uses one supervisor per session, background operation by default with `--foreground`
 available, noninteractive authentication in both modes, Linux/macOS support only, and local bind and remote target
-addresses initially fixed to `127.0.0.1`. The running state means only that the SSH process is alive; an on-demand
-check records HTTP reachability separately.
+addresses for fixed mappings initially fixed to `127.0.0.1`. SOCKS destinations are selected by each client request;
+listeners request loopback, subject to the documented remote sshd policy. The running state means only that the SSH
+process is alive; an on-demand check records HTTP reachability separately.
 
 ## References
 
@@ -534,3 +572,4 @@ check records HTTP reachability separately.
    forwarding failures, and connection sharing.
 4. [Rust UnixStream](https://doc.rust-lang.org/std/os/unix/net/struct.UnixStream.html): the local Unix socket control
    channel.
+5. [OpenSSH sshd_config(5)](https://man.openbsd.org/sshd_config): remote forwarding permission and GatewayPorts policy.

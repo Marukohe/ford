@@ -51,18 +51,54 @@ pub fn validate_host(host: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn validate_mappings(mappings: &[Mapping]) -> Result<(), String> {
+pub fn local_ports<'a>(
+    mappings: &'a [Mapping],
+    socks: &'a [u16],
+) -> impl Iterator<Item = u16> + 'a {
+    mappings
+        .iter()
+        .map(|mapping| mapping.local)
+        .chain(socks.iter().copied())
+}
+
+pub fn describe(mappings: &[Mapping], socks: &[u16], reverse_socks: &[u16]) -> String {
+    mappings
+        .iter()
+        .map(ToString::to_string)
+        .chain(socks.iter().map(|port| format!("socks:{port}")))
+        .chain(
+            reverse_socks
+                .iter()
+                .map(|port| format!("reverse-socks:{port}")),
+        )
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub fn validate_mappings(
+    mappings: &[Mapping],
+    socks: &[u16],
+    reverse_socks: &[u16],
+) -> Result<(), String> {
     let mut ports = HashSet::new();
     for mapping in mappings {
-        if mapping.local == 0 || mapping.remote == 0 || !ports.insert(mapping.local) {
-            return Err(format!(
-                "invalid or duplicate local port: {}",
-                mapping.local
-            ));
+        if mapping.remote == 0 {
+            return Err("remote target ports must be in 1..=65535".into());
         }
     }
-    if mappings.is_empty() {
-        return Err("at least one port mapping is required".into());
+    for port in local_ports(mappings, socks) {
+        if port == 0 || !ports.insert(port) {
+            return Err(format!("invalid or duplicate local port: {port}"));
+        }
+    }
+    ports.clear();
+    for port in reverse_socks {
+        if *port == 0 || !ports.insert(*port) {
+            return Err(format!("invalid or duplicate reverse SOCKS port: {port}"));
+        }
+    }
+    if mappings.is_empty() && socks.is_empty() && reverse_socks.is_empty() {
+        return Err("at least one port mapping, --socks, or --reverse-socks is required".into());
     }
     Ok(())
 }
@@ -135,9 +171,21 @@ mod tests {
         ] {
             assert!(invalid.parse::<Mapping>().is_err(), "accepted {invalid:?}");
         }
-        assert!(validate_mappings(&["3000".parse().unwrap(), "3000:80".parse().unwrap()]).is_err());
         assert!(
-            validate_mappings(&["3000:80".parse().unwrap(), "3001:80".parse().unwrap()]).is_ok()
+            validate_mappings(
+                &["3000".parse().unwrap(), "3000:80".parse().unwrap()],
+                &[],
+                &[]
+            )
+            .is_err()
+        );
+        assert!(
+            validate_mappings(
+                &["3000:80".parse().unwrap(), "3001:80".parse().unwrap()],
+                &[],
+                &[]
+            )
+            .is_ok()
         );
     }
 

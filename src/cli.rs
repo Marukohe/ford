@@ -8,7 +8,7 @@ use std::ffi::OsString;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Forward remote ports through supervised SSH sessions"
+    about = "Forward ports and proxy connections through supervised SSH sessions"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -17,7 +17,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Action {
-    /// Open a session (also: ford HOST PORT...)
+    /// Open a session (also: ford HOST [PORT...])
     Open(Open),
     /// Query live session state
     List {
@@ -100,8 +100,14 @@ pub struct Check {
 #[derive(Args)]
 pub struct Open {
     pub host: String,
-    #[arg(required = true, num_args = 1..)]
+    #[arg(num_args = 0..)]
     pub ports: Vec<Mapping>,
+    /// Local SOCKS port; connections exit through the SSH host (repeatable)
+    #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(1..))]
+    pub socks: Vec<u16>,
+    /// SOCKS port on the SSH host; connections exit here (repeatable; requires remote forwarding)
+    #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(1..))]
+    pub reverse_socks: Vec<u16>,
     #[arg(long)]
     pub name: Option<String>,
     /// SSH through a jump host: alias or user@host[:port]
@@ -119,7 +125,8 @@ pub struct Open {
 impl Open {
     pub fn validate(&self) -> Result<()> {
         validate_host(&self.host).map_err(|e| Error::with_code(2, e))?;
-        validate_mappings(&self.ports).map_err(|e| Error::with_code(2, e))?;
+        validate_mappings(&self.ports, &self.socks, &self.reverse_socks)
+            .map_err(|e| Error::with_code(2, e))?;
         if self.retry.is_some_and(|limit| limit > 100) {
             return Err(Error::with_code(2, "retry limit must be in 0..=100"));
         }

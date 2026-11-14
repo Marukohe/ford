@@ -44,6 +44,12 @@ pub fn arguments(session: &Session) -> Vec<String> {
             format!("127.0.0.1:{}:127.0.0.1:{}", mapping.local, mapping.remote),
         ]);
     }
+    for port in &session.socks {
+        args.extend(["-D".into(), format!("127.0.0.1:{port}")]);
+    }
+    for port in &session.reverse_socks {
+        args.extend(["-R".into(), format!("127.0.0.1:{port}")]);
+    }
     if let Some(jump) = &session.jump {
         args.extend(["-J".into(), jump.clone()]);
     }

@@ -1,6 +1,6 @@
 # ford: Critical Engineering Rules
 
-ford is a lightweight Rust CLI that forwards remote TCP services to the local machine through system OpenSSH. See
+ford is a lightweight Rust CLI for TCP port forwarding and SOCKS proxies through system OpenSSH. See
 [docs/design.md](docs/design.md) for the design.
 
 ## Current Stage

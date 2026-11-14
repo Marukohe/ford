@@ -73,12 +73,11 @@ fn execute() -> Result<i32> {
                     "ID", "NAME", "HOST", "MAPPINGS", "STATE"
                 );
                 for session in visible {
-                    let mappings = session
-                        .mappings
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(",");
+                    let mappings = mapping::describe(
+                        &session.mappings,
+                        &session.socks,
+                        &session.reverse_socks,
+                    );
                     println!(
                         "{:<12} {:<16} {:<24} {:<24} {:<12} {}",
                         &session.id[..12],

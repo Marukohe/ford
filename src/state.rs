@@ -64,6 +64,10 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<u64>,
     pub mappings: Vec<Mapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub socks: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reverse_socks: Vec<u16>,
     pub state: Status,
     pub created_at: u64,
     pub updated_at: u64,
@@ -96,6 +100,7 @@ impl Session {
         if self.target_checks.is_empty() {
             return self.target.clone();
         }
+        let total = self.mappings.len() + self.socks.len() + self.reverse_socks.len();
         self.mappings
             .iter()
             .map(|mapping| {
@@ -103,12 +108,22 @@ impl Session {
                     .target_checks
                     .get(&mapping.local)
                     .map_or_else(|| "unverified".into(), TargetCheck::label);
-                if self.mappings.len() == 1 {
+                if total == 1 {
                     label
                 } else {
                     format!("{}: {label}", mapping.local)
                 }
             })
+            .chain(
+                self.socks
+                    .iter()
+                    .map(|port| format!("socks:{port}: unverified")),
+            )
+            .chain(
+                self.reverse_socks
+                    .iter()
+                    .map(|port| format!("reverse-socks:{port}: unverified")),
+            )
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -364,6 +379,8 @@ impl Paths {
             retry_count: 0,
             retry_at: None,
             mappings: open.ports,
+            socks: open.socks,
+            reverse_socks: open.reverse_socks,
             state: Status::Starting,
             created_at: now(),
             updated_at: now(),
