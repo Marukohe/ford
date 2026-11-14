@@ -1,352 +1,135 @@
 # ford
 
-Access remote web apps, dashboards, and APIs from your own machine through SSH.
+SSH tunnels and SOCKS proxies, with names, saved groups, and automatic reconnection.
 
-ford brings a remote port to `localhost` and keeps the tunnel running in the background. Give each tunnel a name,
-list your sessions, and close them when you are done.
-
-You can also proxy selected outbound requests through another machine, including when that machine must initiate
-the SSH connection back to you.
+Bring a private remote service to localhost:
 
 ```bash
-ford user@server 8080:3000 --name web
-# Open http://127.0.0.1:8080 in your browser
+ford user@server 8080:3000 --name web --retry
+# Open http://127.0.0.1:8080
 
 ford list
 ford close web
 ```
 
-Your server only needs an SSH port accessible to you, usually port 22. The web app can stay on the server's
-`127.0.0.1:3000`; you do not need to expose that port publicly or install ford on the server.
+Only SSH needs to be reachable. Keep your app's port private; no ford installation is needed on the SSH server.
+
+## Highlights
+
+- **Port forwarding:** map one or several remote TCP ports to local ports of your choice.
+- **Jump hosts:** reach internal machines through a bastion with `--jump` / `-J`.
+- **SOCKS in both directions:** send selected requests through another machine, even when it must connect back to you.
+- **Managed sessions:** named background tunnels, foreground mode, logs, JSON output, and explicit shutdown.
+- **Saved groups:** save a set of mappings and restore them with one command.
+- **Bounded reconnection:** opt into retries with increasing delays; cancel them with `close` or Ctrl+C.
+- **Fits your SSH setup:** reuse aliases, keys, agents, and known hosts. One Rust executable, using system OpenSSH.
 
 ## Install
 
-ford supports Linux and macOS on Intel/AMD x86_64 and ARM64, including Apple Silicon. You need an OpenSSH client
-(`ssh`) on your machine and an SSH server that allows TCP forwarding on the remote machine.
-
-### Quick install
-
-In Bash or zsh, run:
+Linux and macOS, x86_64 and ARM64. Requires OpenSSH and an SSH server that allows TCP forwarding.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Marukohe/ford/main/scripts/install.sh | sh
 ```
 
-The installer downloads the latest stable release for your machine, verifies its SHA256 checksum, and installs
-`ford` in `~/.local/bin`. It configures PATH for future Bash or zsh terminals. Open a new terminal or run the command
-printed by the installer to activate PATH in your current terminal. Rust and sudo are not required. Run the same
-installation command again to upgrade.
+Installs the latest release to `~/.local/bin`, verifies its checksum, and configures PATH for Bash or zsh.
+Open a new terminal or run the activation command printed by the installer. Run the same command to upgrade.
 
-Quick installation requires a published GitHub Release. If no release is available yet, use the source installation
-below.
-
-### Download manually
-
-Download the archive matching your machine from [GitHub Releases](https://github.com/Marukohe/ford/releases).
-Choose the compiled archive rather than GitHub's source-code downloads:
-
-| Machine | Archive filename ends with |
-| --- | --- |
-| Linux Intel/AMD x86_64 | `x86_64-unknown-linux-gnu.tar.gz` |
-| Linux ARM64 | `aarch64-unknown-linux-gnu.tar.gz` |
-| macOS Intel | `x86_64-apple-darwin.tar.gz` |
-| macOS Apple Silicon | `aarch64-apple-darwin.tar.gz` |
-
-For example, after downloading the Linux x86_64 archive and `SHA256SUMS` from the same release:
-
-```bash
-grep '  ford-v0.3.0-x86_64-unknown-linux-gnu.tar.gz$' SHA256SUMS | sha256sum --check
-tar -xzf ford-v0.3.0-x86_64-unknown-linux-gnu.tar.gz ford
-mkdir -p "$HOME/.local/bin"
-install -m 755 ford "$HOME/.local/bin/ford"
-export PATH="$HOME/.local/bin:$PATH"
-ford --version
-```
-
-On macOS, use `shasum -a 256 --check` for checksum verification and substitute the appropriate archive filename.
-For manual installation, also add the PATH export to `~/.zshrc` or `~/.bashrc` to keep it in future terminals.
-Linux archives require glibc: x86_64 builds use Ubuntu 22.04 and ARM64 builds use Ubuntu 24.04.
-
-### Build from source
-
-Install Git and Rust through rustup, then run:
+[Manual downloads](https://github.com/Marukohe/ford/releases) are also available. To build the current source with Rust:
 
 ```bash
 git clone https://github.com/Marukohe/ford.git
 cd ford
 cargo install --path . --locked
-ford --version
 ```
 
-The repository selects Rust 1.93.1 automatically. Cargo installs `ford` in `~/.cargo/bin`; make sure that directory is
-on your `PATH`.
+First confirm that `ssh user@server` works with a key or agent and a trusted host key.
+ford does not prompt for passwords.
 
-## Your first tunnel
+## Forward ports
 
-First, check that you can log in to the server:
+Use `LOCAL:REMOTE`, or a single number for the same port on both machines:
 
 ```bash
-ssh user@server
+ford devbox 3000                              # localhost:3000 -> devbox:3000
+ford devbox 8080:3000 --name web               # localhost:8080 -> devbox:3000
+ford devbox 3000 5173 8080:8000 --name dev      # Several ports, one session
+ford internal 8080:3000 --jump bastion         # SSH through bastion into internal
 ```
 
-Confirm its host key and set up an SSH key or agent before using ford. ford uses your existing SSH configuration and
-does not prompt for passwords or key passphrases. Exit the remote shell to return to your local terminal.
+Fixed mappings connect to `127.0.0.1` on the remote machine. Local listeners bind to `127.0.0.1`.
+Use SSH configuration for login ports and identities; jump hosts also accept `user@host:port`.
 
-Suppose a web app runs on port 3000 on that server:
+## Proxy outbound requests
 
-```bash
-ford user@server 8080:3000 --name web
-```
+SOCKS options currently require a source build; they will ship in the next release.
 
-Open `http://127.0.0.1:8080` in your local browser. The tunnel runs in the background, so you can keep using your
-terminal. When you are finished:
+Choose the direction that matches your SSH access:
 
 ```bash
-ford close web
-```
-
-Local ports bind to `127.0.0.1`, so other machines on your network cannot use your tunnel.
-
-## Choose your ports
-
-Use `LOCAL:REMOTE` to choose a local port. A single port number uses the same port on both machines.
-
-| Command | Local address | Remote service |
-| --- | --- | --- |
-| `ford devbox 3000` | `127.0.0.1:3000` | `devbox` at `127.0.0.1:3000` |
-| `ford devbox 8080:3000` | `127.0.0.1:8080` | `devbox` at `127.0.0.1:3000` |
-| `ford devbox 8080:300` | `127.0.0.1:8080` | `devbox` at `127.0.0.1:300` |
-
-Forward several services through one session:
-
-```bash
-ford devbox 3000 5173 8080:8000 --name dev
-```
-
-If a local port is already in use, choose another one, such as `8081:3000`.
-
-## Reach a server through a jump host
-
-When the target server is reachable only through another SSH machine, use `--jump` (or `-J`):
-
-```bash
-ford internal-server 8080:3000 --jump bastion --name web
-```
-
-Open `http://127.0.0.1:8080` locally to reach port 3000 on `internal-server`. ford connects through `bastion` and
-logs into `internal-server`; both machines need SSH access. The jump host must be able to reach the target's SSH port.
-Your local SSH keys or agent authenticate both connections.
-
-You can use an SSH alias for the jump host or specify its username and SSH port:
-
-```bash
-ford alice@internal.example 8080:3000 -J bob@bastion.example:2222 --name web
-```
-
-`ford list` shows the route, and the session uses the same `check`, `logs`, and `close` commands. Use SSH configuration
-for each machine's keys and target login port. Existing `ProxyJump` settings still work; an explicit `--jump` overrides
-them. Each `--jump` accepts one host; use an SSH alias for an IPv6 jump address.
-
-## Send requests through another machine
-
-SOCKS proxies let an application choose which requests use another machine's network connection. HTTP and HTTPS
-traffic passes through without changing headers or intercepting TLS. Only applications configured to use the proxy
-are affected; ford does not change your system routing or proxy settings.
-
-### Connect to the machine you want to exit through
-
-If `server` can SSH into `server1`, run this **on `server`**:
-
-```bash
+# Run on server: requests exit through server1
 ford server1 --socks 1080 --name outbound --retry
-curl --proxy socks5h://127.0.0.1:1080 https://example.com
-```
 
-The SOCKS listener is on `server`; selected requests exit through `server1`. With `socks5h`, destination hostnames
-are also resolved on `server1`.
-
-### Let the exit machine connect back to you
-
-If only `server1` can SSH into `server`, run this **on `server1`**:
-
-```bash
+# Alternatively, run on server1: expose a proxy on server, with egress through server1
 ford server --reverse-socks 1080 --name outbound --retry
 ```
 
-Then run this **on `server`**:
+In either case, run selected requests **on server**:
 
 ```bash
 curl --proxy socks5h://127.0.0.1:1080 https://example.com
 ```
 
-The SOCKS listener is on `server`; requests and destination DNS lookups exit through `server1`. Run `ford list`,
-`ford logs outbound`, and `ford close outbound` on `server1`, where the supervisor runs. No ford installation is
-needed on `server`.
+`socks5h` also resolves destination hostnames on the exit machine. Only applications using the proxy are affected.
+Manage the session on the machine where you launched ford. Both modes support jump hosts, groups, and retries;
+repeat the options for more ports or combine them with fixed mappings.
 
-Reverse SOCKS requires an OpenSSH client that supports dynamic remote forwarding and a server that permits remote
-TCP forwarding. The remote SSH server must use `GatewayPorts no` (the default) or `clientspecified`.
-`GatewayPorts yes` forces wildcard binding even when loopback is requested; ford cannot verify the server's actual
-bind address. Configure that policy before using reverse SOCKS. See the
-[OpenSSH server documentation](https://man.openbsd.org/sshd_config#GatewayPorts).
+Reverse SOCKS requires dynamic remote forwarding support and remote TCP forwarding permission. The SSH server must use
+`GatewayPorts no` or `clientspecified`; `yes` overrides loopback binding. ford cannot verify that remote policy.
+See [OpenSSH's GatewayPorts documentation](https://man.openbsd.org/sshd_config#GatewayPorts).
 
-Both modes request `127.0.0.1` listeners and support `--jump`, `--foreground`, `--retry`, and saved groups. Repeat
-the options for multiple proxy ports, or combine them with fixed mappings:
+## Save mapping groups
 
 ```bash
-ford devbox 8080:3000 --socks 1080 --reverse-socks 1081 --name work
-ford group save work-group work
-```
-
-Proxy URLs must use SOCKS, such as `socks5h://127.0.0.1:1080`; this is not an HTTP CONNECT proxy endpoint.
-`ford check` checks fixed local mappings only. SOCKS entries remain `unverified`; test them with your application's
-proxy setting or `curl --proxy`. OpenSSH implements both forwarding modes; see its
-[`-D` and `-R` documentation](https://man.openbsd.org/ssh).
-
-## Manage your tunnels
-
-```bash
-ford list                       # List current sessions
-ford list --all                 # Also show completed sessions
-ford close web                  # Close a named session
-ford close --all                 # Close all current sessions
-ford logs web                   # Read recent SSH diagnostics
-ford logs web --lines 100        # Show the last 100 lines
-ford list --json                 # Get session details for scripts
-```
-
-You can use a session's full ID or a unique ID prefix in place of its name. Completed sessions retain their logs,
-and you can reuse a name after its session has finished.
-
-For a temporary tunnel that shows SSH diagnostics in your terminal, use foreground mode:
-
-```bash
-ford devbox 3000 --foreground
-```
-
-Press Ctrl+C to close it.
-
-## Automatic reconnection
-
-Enable reconnection when you create a session:
-
-```bash
-ford devbox 8080:3000 --name web --retry
-ford internal 9000:8000 --jump bastion --name api --retry=10
-```
-
-`--retry` allows five SSH restarts over the session's lifetime. Use `--retry=N` to choose a limit from 0 to 100;
-0 disables retries. Retrying is off by default. Waits increase from 1 to 2, 4, 8, 16, then 30 seconds and stay capped
-at 30 seconds. Starting a new SSH process does not reset the budget.
-
-`ford list` shows `retrying` while waiting and `running` when a replacement SSH process is alive. The session keeps
-its name, ID, and mappings. `ford logs web` retains SSH errors and shows retry attempts. `ford list --json` includes
-the retry limit, attempts used, and the next retry's Unix timestamp when applicable; zero counts are omitted.
-`ford close web` cancels pending retries;
-Ctrl+C does the same in foreground mode.
-
-Reconnection starts after SSH exits. Keepalives already detect an unresponsive SSH connection using a 15-second
-interval and three unanswered probes; there is no fixed session duration. A failed HTTP check alone does not restart
-SSH. After reconnection, existing TCP or WebSocket connections need to be reopened, and `TARGET` returns to
-`unverified` until you run another check.
-
-Retries also cover authentication, host key, and port bind failures: SSH exit codes cannot reliably distinguish them
-from network failures. Trust checks stay enabled, diagnostics remain available, and the session becomes `failed`
-when the budget is exhausted. A missing SSH executable, log failure, or uncertain process cleanup stops the session
-without retrying. Reconnection requires a live supervisor; it does not resume sessions after a reboot or supervisor
-failure. Restart existing sessions with `--retry` to enable it.
-
-## Save and reopen mapping groups
-
-Save selected sessions together so you can reopen their mappings with one command:
-
-```bash
-ford devbox 8080:3000 --name web
-ford internal 9000:8000 --jump bastion --name api
-ford group save work web api
-
+ford group save work web dev       # Save existing sessions, including their jump and retry settings
 ford group close work
-ford group open work
+ford group open work               # Restore the group; skip matching active sessions
+ford group list
+ford group show work
+ford group remove work             # Remove the saved group; leave sessions running
 ```
 
-A group keeps the hosts, fixed mappings, SOCKS ports and directions, session names, jump hosts, and retry limits.
-`group open` creates new background sessions with fresh retry budgets and skips matching sessions that are already
-running or retrying. Other sessions are left alone. Known name or port conflicts must be resolved first;
-an unreachable session is never replaced automatically.
+Use `group save work --all --force` to replace a group with all running or retrying sessions. Groups retain fixed and
+SOCKS mappings, survive restarts, and leave unrelated sessions alone. Resolve name or port conflicts before reopening.
+
+## Reconnect automatically
 
 ```bash
-ford group save work --all --force   # Replace the group with all running or retrying sessions
-ford group list                     # List saved groups
-ford group show work                # Inspect saved routes and ports
-ford group remove work              # Delete the saved group; keep its running sessions
+ford devbox 8080:3000 --name web --retry       # Up to five SSH restarts
+ford devbox 8080:3000 --name web --retry=10    # Choose a lifetime limit from 0 to 100
 ```
 
-You can save completed sessions by name or ID, and use IDs for unnamed sessions. Groups survive session closure and
-ford upgrades. They are stored privately under `$XDG_STATE_HOME/ford/groups`, or `~/.local/state/ford/groups`.
-Reopening uses your current SSH configuration. Health results are checked again only when you run `ford check`.
+Retries are off by default. Delays grow from 1, 2, 4, 8, 16 to 30 seconds, capped at 30 seconds. `ford list` shows
+`retrying` between attempts. The budget does not reset after recovery; errors remain in logs, and exhaustion ends the
+session. `close` or foreground Ctrl+C cancels retries. Existing TCP/WebSocket connections must reopen after recovery.
 
-Sessions open independently: if a launch fails, successful launches stay running and the command reports the failure.
-Creation acknowledgment confirms SSH process startup; check the service separately for readiness.
-
-## Check a web app
-
-Run an HTTP check through an existing tunnel to update its `TARGET` result:
+## Manage and check sessions
 
 ```bash
-ford check web --port 8080 --http /
-ford check web --port 8080 --http / --expect-status 200
-ford list
+ford list                         # Current sessions; add --all for history or --json for scripts
+ford logs web                     # Recent SSH diagnostics
+ford check web --http / --expect-status 200
+ford close web                    # Also accepts a session ID or unique ID prefix
+ford close --all
+ford devbox 3000 --foreground      # Stream logs; Ctrl+C closes the session
 ```
 
-Use any read-only path your app already serves. Without `--expect-status`, an HTTP response such as 401 or 404
-reports `reachable` and shows the status code. With an expected status, ford reports `ok` only when it matches.
-Timeouts and connection errors are also recorded. The command exits with a nonzero status on failure. For a mixed
-session, this checks only its fixed mappings; proxy ports are not HTTP endpoints for this command.
+`running` means SSH is alive, not that your app is ready. `ford check` updates `TARGET` for fixed HTTP mappings;
+use `--port LOCAL` when there are several. Any HTTP response counts as reachable unless an exact status is required.
+Checks need `curl` and `lsof`; SOCKS ports remain `unverified` and should be tested with a proxy-aware client.
 
-`TARGET` shows the last result and its age for each checked port. It stays `unverified` until you run a check.
-You can omit `--port` for a session with one mapping. A failed check does not close the tunnel.
+If a tunnel fails, use `list --all` and `logs` to inspect it. `unreachable` means ford cannot contact its supervisor;
+closure cannot be confirmed. Reconnection requires a live supervisor and does not resume sessions after a reboot.
 
-Checks support plain HTTP and require `curl` and `lsof` on PATH. Restart sessions created by older versions of ford
-before checking them.
-
-## Use your SSH configuration
-
-ford accepts SSH aliases, so you can keep usernames, custom SSH ports, keys, and jump hosts in `~/.ssh/config`.
-For example:
-
-```sshconfig
-Host devbox
-    HostName server.example.com
-    User alice
-    Port 2222
-    IdentityFile ~/.ssh/id_ed25519
-```
-
-Then run `ford devbox 8080:3000 --name web`.
-
-Existing port forwards in your SSH configuration also apply. Use an alias without extra forwards if you only want
-the ports specified in your ford command.
-
-## Troubleshooting
-
-**The session says `running`, but the page does not load.** `running` means the SSH process is alive. Use
-`ford check web --http /` for a single HTTP mapping. Check the app on the server, confirm the port mapping, and run
-`ford logs web` for SSH errors.
-
-**Authentication or host key verification fails.** Try `ssh devbox` and resolve the SSH error there. ford needs key
-or agent authentication that works without a password or passphrase prompt.
-
-**A session failed or disappeared from the list.** Run `ford list --all` and `ford logs web`. Logs remain available
-after a session ends. Use `--retry` when creating a session to recover from temporary connection loss. If retries
-are disabled or exhausted, start a new session after resolving the problem.
-
-**A session says `unreachable`.** ford cannot contact the process managing that tunnel, so it cannot confirm whether
-the tunnel is still active or close it automatically. Check your local processes before starting a replacement on
-the same local port.
-
-## More information
-
-- [Changelog](CHANGELOG.md)
-- [Releases and release notes](https://github.com/Marukohe/ford/releases)
-- [Design and behavior](docs/design.md)
-- [Validation results](docs/validation.md)
-- [Release maintenance](docs/releasing.md)
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/Marukohe/ford/releases) ·
+[Full behavior](docs/design.md) · [Release maintenance](docs/releasing.md)
