@@ -8,6 +8,8 @@ Notable changes in each version of ford.
 
 - Save named groups of session mappings and reopen them with one command, including jump hosts.
 - List, inspect, update, close, and remove groups without replacing unrelated or unreachable sessions.
+- Reconnect SSH sessions with opt-in `--retry[=N]`, bounded exponential backoff, and cancellable retry waits.
+- Keep retry policies in saved groups and invalidate target checks when replacing an SSH attempt.
 
 ## [0.2.0]
 

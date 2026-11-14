@@ -442,6 +442,54 @@ Host *
             check("unavailable target and server forwarding denial do not falsely imply HTTP health")
 
             local = free_port()
+            ford("internal", f"{local}:{target}", "--jump", "good", "--retry=3", "--name", "reconnect")
+            wait_for(lambda: fetch(local) == PAYLOAD, "initial retry-enabled forwarding")
+            ford("check", "reconnect", "--http", "/", "--expect-status", 200)
+            original = state("reconnect")
+            old_check = original["target_checks"][str(local)]
+            helpers = []
+            if os.uname().sysname == "Linux":
+                helpers = Path(f"/proc/{original['ssh_pid']}/task/{original['ssh_pid']}/children").read_text().split()
+            stop_process(daemons[0])
+            os.kill(original["ssh_pid"], signal.SIGKILL)
+            wait_for(lambda: state("reconnect")["state"] == "retrying", "retry backoff after connection loss")
+            pending = state("reconnect")
+            assert pending["target"] == "unverified" and not pending.get("target_checks")
+            assert pending["ssh_pid"] is None and pending["retry_at"]
+            wait_for(lambda: state("reconnect")["state"] == "retrying"
+                     and state("reconnect").get("retry_count") == 1, "retry during jump-host outage")
+            daemon = subprocess.Popen([sshd, "-D", "-e", "-f", str(root / "sshd-0.conf")],
+                                      stdout=daemon_logs[0], stderr=daemon_logs[0])
+            daemons[0] = daemon
+            cleanup.callback(stop_process, daemon)
+            wait_for(lambda: fetch(local) == PAYLOAD, "forwarding restored after jump-host recovery")
+            restored = state("reconnect")
+            assert restored["id"] == original["id"] and restored["supervisor_pid"] == original["supervisor_pid"]
+            assert restored["ssh_pid"] != original["ssh_pid"] and restored["retry_count"] == 2
+            assert restored["target"] == "unverified" and not restored.get("target_checks")
+            if os.uname().sysname == "Linux":
+                wait_for(lambda: all(not alive(pid) for pid in [original["ssh_pid"], *helpers]),
+                         "previous SSH attempt and jump-child cleanup")
+            check("automatic reconnection restores forwarding through a recovered jump host")
+
+            # A previous attempt's HTTP result must stay invalid even if its PID were reused.
+            with socket.socket(socket.AF_UNIX) as control:
+                control.settimeout(2)
+                control.connect(str(root / "run/ford" / f"{restored['id']}.sock"))
+                request = {"version": 1, "session_id": restored["id"], "request_id": "stale-retry-check",
+                           "operation": {"recordcheck": {"port": local, "ssh_pid": restored["ssh_pid"],
+                                                         "retry_count": 0, "check": old_check}}}
+                control.sendall(json.dumps(request).encode() + b"\n")
+                with control.makefile("rb") as response:
+                    assert "attempt changed" in json.loads(response.readline())["error"]
+            assert state("reconnect")["target"] == "unverified"
+            ford("check", "reconnect", "--http", "/", "--expect-status", 200)
+            assert state("reconnect")["target"] == "ok"
+            ford("close", "reconnect")
+            wait_for(lambda: released(local), "reconnected session port release")
+            check("reconnection rejects stale target checks and accepts a fresh observation")
+
+            local = free_port()
             foreground = subprocess.Popen([str(binary), "good", f"{local}:{target}", "--name", "fg",
                                            "--foreground"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             wait_for(lambda: fetch(local) == PAYLOAD, "foreground forwarding")

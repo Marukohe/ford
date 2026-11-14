@@ -60,7 +60,7 @@ pub enum GroupCommand {
         /// Session names, IDs, or unique ID prefixes (completed sessions are accepted)
         #[arg(required_unless_present = "all", conflicts_with = "all", num_args = 1..)]
         sessions: Vec<String>,
-        /// Save all currently running sessions
+        /// Save all running or reconnecting sessions
         #[arg(long)]
         all: bool,
         /// Replace an existing saved group
@@ -107,6 +107,10 @@ pub struct Open {
     /// SSH through a jump host: alias or user@host[:port]
     #[arg(short = 'J', long, value_name = "HOST")]
     pub jump: Option<String>,
+    /// Retry unexpected SSH exits (default: 5 retries; use --retry=N to choose 0..=100)
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "5",
+          value_parser = clap::value_parser!(u32).range(0..=100))]
+    pub retry: Option<u32>,
     /// Stream logs and close on Ctrl+C instead of detaching
     #[arg(long)]
     pub foreground: bool,
@@ -116,6 +120,9 @@ impl Open {
     pub fn validate(&self) -> Result<()> {
         validate_host(&self.host).map_err(|e| Error::with_code(2, e))?;
         validate_mappings(&self.ports).map_err(|e| Error::with_code(2, e))?;
+        if self.retry.is_some_and(|limit| limit > 100) {
+            return Err(Error::with_code(2, "retry limit must be in 0..=100"));
+        }
         if let Some(jump) = &self.jump {
             validate_jump(jump).map_err(|e| Error::with_code(2, e))?;
         }

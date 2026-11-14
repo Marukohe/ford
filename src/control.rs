@@ -28,7 +28,12 @@ pub const LIMIT: usize = 65536;
 pub enum Operation {
     Status,
     Close,
-    RecordCheck { port: u16, check: TargetCheck },
+    RecordCheck {
+        port: u16,
+        ssh_pid: u32,
+        retry_count: u32,
+        check: TargetCheck,
+    },
 }
 
 #[derive(Deserialize, Serialize)]

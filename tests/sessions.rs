@@ -47,6 +47,14 @@ printf 'SSH fixture diagnostic\n' >&2
 publish "$FORD_TEST_ARGS" "$@"
 case "$FORD_TEST_MODE" in
   fail) exit 255 ;;
+  flaky)
+    if [ ! -f "$FORD_TEST_ONCE" ]; then
+      printf 'first SSH attempt failed\n' >&2
+      : > "$FORD_TEST_ONCE"
+      exit 255
+    fi
+    exec sleep 300
+    ;;
   orphan)
     sleep 300 &
     publish "$FORD_TEST_HELPER" "$!"
@@ -88,6 +96,7 @@ esac
                 ),
             )
             .env("FORD_TEST_ARGS", root.join("args"))
+            .env("FORD_TEST_ONCE", root.join("once"))
             .env("FORD_TEST_HELPER", root.join("helper"));
         command
     }
@@ -207,6 +216,8 @@ fn invalid_input_has_no_side_effects() {
         vec!["devbox", "3000", "--jump", "bastion:65536"],
         vec!["devbox", "3000", "--jump", "bastion:"],
         vec!["devbox", "3000", "--jump", "::1"],
+        vec!["devbox", "3000", "--retry=101"],
+        vec!["devbox", "3000", "--retry=abc"],
     ] {
         assert_eq!(f.output(&args).status.code(), Some(2), "{args:?}");
     }
@@ -443,7 +454,7 @@ fn unsafe_paths_and_missing_ssh_fail_explicitly() {
     let output = f
         .command()
         .env("PATH", f.root.path().join("bin"))
-        .args(["devbox", "3000", "--name", "missing"])
+        .args(["devbox", "3000", "--name", "missing", "--retry"])
         .output()
         .unwrap();
     assert_eq!(
@@ -800,4 +811,161 @@ fn invalid_and_unsafe_groups_do_not_start_sessions_or_overwrite_other_files() {
     symlink(&outside, directory).unwrap();
     assert!(!f.output(&["group", "save", "safe", "web"]).status.success());
     assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
+}
+
+#[test]
+fn retry_recovers_the_same_session_and_preserves_logs_and_group_policy() {
+    let f = Fixture::new();
+    let output = f
+        .command()
+        .env("FORD_TEST_MODE", "flaky")
+        .args(["devbox", "3000", "--name", "retry", "--retry"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let original = f.session("retry");
+    let mut recovered = Value::Null;
+    wait_for(|| {
+        recovered = f.session("retry");
+        recovered["state"] == "running" && recovered["retry_count"] == 1
+    });
+    assert_eq!(recovered["id"], original["id"]);
+    assert_eq!(recovered["supervisor_pid"], original["supervisor_pid"]);
+    assert_eq!(recovered["retry"], 5);
+    assert_eq!(recovered["retry_at"], Value::Null);
+    let logs = f.ok(&["logs", "retry"]);
+    let logs = String::from_utf8_lossy(&logs.stdout);
+    assert!(logs.contains("first SSH attempt failed"));
+    assert!(logs.contains("starting SSH retry 1/5"));
+    assert_eq!(logs.matches("SSH fixture diagnostic").count(), 2);
+    kill(
+        Pid::from_raw(recovered["ssh_pid"].as_u64().unwrap() as i32),
+        Signal::SIGKILL,
+    )
+    .unwrap();
+    wait_for(|| {
+        let session = f.session("retry");
+        session["state"] == "running" && session["retry_count"] == 2
+    });
+    // A live replacement does not reset the lifetime retry budget.
+    assert_eq!(
+        f.session("retry")["supervisor_pid"],
+        original["supervisor_pid"]
+    );
+    f.ok(&["group", "save", "work", "retry"]);
+    let group: Value = serde_json::from_slice(
+        &fs::read(f.root.path().join("state/ford/groups/work.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(group["sessions"][0]["retry"], 5);
+    assert!(group["sessions"][0].get("retry_count").is_none());
+    f.ok(&["group", "close", "work"]);
+    f.ok(&["group", "open", "work"]);
+    let sessions = f.sessions();
+    let restored = sessions.iter().find(|s| s["state"] == "running").unwrap();
+    assert_ne!(restored["id"], original["id"]);
+    assert_eq!(restored["retry"], 5);
+    assert_eq!(
+        restored
+            .get("retry_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        0
+    );
+}
+
+#[test]
+fn retry_exhaustion_preserves_the_last_exit_and_attempt_diagnostics() {
+    let f = Fixture::new();
+    let output = f
+        .command()
+        .env("FORD_TEST_MODE", "fail")
+        .args(["devbox", "3000", "--name", "limited", "--retry=2"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let failed = f.wait_state("limited", "failed");
+    assert_eq!(failed["retry_count"], 2);
+    assert_eq!(failed["exit_code"], 255);
+    assert_eq!(failed["cleanup_complete"], true);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("retry limit reached")
+    );
+    let logs = f.ok(&["logs", "limited"]);
+    assert_eq!(
+        String::from_utf8_lossy(&logs.stdout)
+            .matches("SSH fixture diagnostic")
+            .count(),
+        3
+    );
+    f.ok(&["close", "limited"]);
+}
+
+#[test]
+fn closing_a_reconnecting_group_cancels_backoff_without_duplicate_sessions() {
+    let f = Fixture::new();
+    assert!(
+        f.command()
+            .env("FORD_TEST_MODE", "fail")
+            .args(["devbox", "3000", "--name", "waiting", "--retry"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    wait_for(|| {
+        let session = f.session("waiting");
+        session["state"] == "retrying" && session["retry_count"] == 2
+    });
+    f.ok(&["group", "save", "waiting-group", "--all"]);
+    let output = f.ok(&["group", "open", "waiting-group"]);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("already running 1"));
+    assert_eq!(f.sessions().len(), 1);
+    let start = Instant::now();
+    f.ok(&["group", "close", "waiting-group"]);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    let closed = f.session("waiting");
+    assert_eq!(closed["state"], "closed");
+    assert_eq!(closed["retry_count"], 2);
+    assert_eq!(closed["ssh_pid"], Value::Null);
+    assert_eq!(closed["retry_at"], Value::Null);
+    let id = closed["id"].as_str().unwrap();
+    wait_for(|| !f.root.path().join(format!("run/ford/{id}.sock")).exists());
+}
+
+#[test]
+fn foreground_interrupt_cancels_retry_backoff() {
+    let f = Fixture::new();
+    let mut child = f
+        .command()
+        .env("FORD_TEST_MODE", "fail")
+        .args([
+            "devbox",
+            "3000",
+            "--name",
+            "fg-retry",
+            "--retry=2",
+            "--foreground",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for(|| {
+        f.sessions()
+            .iter()
+            .any(|session| session["name"] == "fg-retry" && session["state"] == "retrying")
+    });
+    kill(Pid::from_raw(child.id() as i32), Signal::SIGINT).unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(130));
+    let closed = f.session("fg-retry");
+    assert_eq!(closed["state"], "closed");
+    assert_eq!(closed["cleanup_complete"], true);
 }

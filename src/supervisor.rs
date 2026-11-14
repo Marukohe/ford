@@ -2,7 +2,7 @@ use crate::{
     check::TargetCheck,
     control::{self, Operation, Request, VERSION},
     error::{Error, Result},
-    ssh::OwnedSsh,
+    ssh::{self, OwnedSsh},
     state::{self, Paths, Session, Status},
 };
 use nix::{
@@ -178,10 +178,12 @@ pub fn print_session(session: &Session) {
             mapping.local, session.host, mapping.remote
         );
     }
-    println!(
-        "State: {} (SSH process alive; forwarding unverified)",
-        session.state.label()
-    );
+    let detail = match session.state {
+        Status::Running => "SSH process alive; forwarding unverified",
+        Status::Retrying => "waiting to restart SSH; forwarding unverified",
+        _ => "forwarding unverified",
+    };
+    println!("State: {} ({detail})", session.state.label());
 }
 
 fn supervise(
@@ -202,36 +204,49 @@ fn supervise(
     session.updated_at = state::now();
     paths.save(session)?;
     let socket_path = paths.socket(&session.id);
+    let mut cleanup_complete = true;
     let result = (|| -> Result<i32> {
         let listener = UnixListener::bind(&socket_path)?;
         state::socket_permissions(&socket_path)?;
         listener.set_nonblocking(true)?;
-        let mut ssh = OwnedSsh::spawn(session)?;
-        session.ssh_pid = Some(ssh.pid());
-        let logs = ssh.logs(paths, session, foreground)?;
-        let result = run(
-            paths,
-            session,
-            &listener,
-            &mut ssh,
-            &logs,
-            &signal,
-            foreground,
-            &mut startup_stream,
-        );
+        let mut ssh = Some(OwnedSsh::spawn(session)?);
+        session.ssh_pid = ssh.as_ref().map(OwnedSsh::pid);
+        let mut logs = None;
+        let result = (|| {
+            logs = Some(
+                ssh.as_mut()
+                    .expect("SSH was spawned")
+                    .logs(paths, session, foreground)?,
+            );
+            run(
+                paths,
+                session,
+                &listener,
+                &mut ssh,
+                &mut logs,
+                &signal,
+                foreground,
+                &mut startup_stream,
+            )
+        })();
         if result.is_err() {
-            let status = ssh.reap()?;
-            session.exit_code = status.code();
-            session.exit_signal = status.signal();
+            if let Some(ssh) = ssh.as_mut() {
+                let status = ssh.reap().inspect_err(|_| cleanup_complete = false)?;
+                session.exit_code = status.code();
+                session.exit_signal = status.signal();
+            }
             // Finish draining diagnostics before the supervisor process exits on an error path.
-            let _ = logs.recv_timeout(Duration::from_secs(2));
+            if let Some(logs) = logs.as_ref() {
+                let _ = logs.recv_timeout(Duration::from_secs(2));
+            }
         }
         result
     })();
     if let Err(error) = &result {
         session.state = Status::Failed;
         session.error = Some(error.to_string());
-        session.cleanup_complete = true;
+        session.cleanup_complete = cleanup_complete;
+        session.retry_at = None;
         session.updated_at = state::now();
         let _ = paths.save(session);
         if let Some(mut stream) = startup_stream {
@@ -248,8 +263,8 @@ fn run(
     paths: &Paths,
     session: &mut Session,
     listener: &UnixListener,
-    ssh: &mut OwnedSsh,
-    logs: &Receiver<Result<()>>,
+    ssh: &mut Option<OwnedSsh>,
+    logs: &mut Option<Receiver<Result<()>>>,
     signal: &AtomicUsize,
     foreground: bool,
     startup_stream: &mut Option<UnixStream>,
@@ -257,94 +272,165 @@ fn run(
     session.state = Status::Running;
     session.updated_at = state::now();
     paths.save(session)?;
-    if ssh.exited()? {
-        let status = ssh.reap()?;
-        return Err(Error::with_code(
-            status.code().filter(|c| *c > 0).unwrap_or(1),
-            format!("SSH exited before startup acknowledgment: {status}; inspect session logs"),
-        ));
-    }
-    if let Some(stream) = startup_stream.as_mut() {
-        control::send(stream, &startup(session, None), START_TIMEOUT)?;
-        let commit: Handshake = control::receive(stream, START_TIMEOUT)?;
-        if commit.version != VERSION || commit.session_id != session.id || commit.stage != "commit"
-        {
-            return Err(Error::new("invalid startup commit"));
-        }
-        control::send(stream, &startup(session, None), START_TIMEOUT)?;
-        startup_stream.take();
-    } else if foreground {
-        print_session(session);
-    }
-
-    let mut waiting: Vec<(UnixStream, Request)> = Vec::new();
-    let mut deadline = None;
+    let mut startup_pending = true;
+    let mut waiting = Vec::new();
+    let mut shutdown_deadline = None;
+    let mut retry_deadline = None;
     let mut killed = false;
     let mut failure = None;
     let mut log_result = None;
     loop {
-        let received_signal = signal.load(Ordering::Relaxed);
-        if received_signal != 0 && session.state != Status::Closing {
-            begin_close(paths, session, ssh, &mut deadline)?;
+        if signal.load(Ordering::Relaxed) != 0 && session.state != Status::Closing {
+            begin_close(paths, session, ssh.as_ref(), &mut shutdown_deadline)?;
+            retry_deadline = None;
         }
         if log_result.is_none()
+            && let Some(logs) = logs.as_ref()
             && let Ok(result) = logs.try_recv()
         {
             if let Err(error) = &result {
                 failure = Some(format!("cannot write SSH logs: {error}"));
                 if session.state != Status::Closing {
-                    begin_close(paths, session, ssh, &mut deadline)?;
+                    begin_close(paths, session, ssh.as_ref(), &mut shutdown_deadline)?;
                 }
             }
             log_result = Some(result);
         }
-        if ssh.exited()? {
-            let expected = session.state == Status::Closing;
-            let status = ssh.reap()?;
+        if let Some(child) = ssh.as_mut()
+            && child.exited()?
+        {
+            let expected = session.state == Status::Closing || signal.load(Ordering::Relaxed) != 0;
+            let status = child.reap()?;
             session.exit_code = status.code();
             session.exit_signal = status.signal();
+            *ssh = None;
             if log_result.is_none() {
                 log_result = Some(
-                    logs.recv_timeout(Duration::from_secs(2))
+                    logs.as_ref()
+                        .expect("SSH has a log receiver")
+                        .recv_timeout(Duration::from_secs(2))
                         .unwrap_or_else(|_| Err(Error::new("SSH log drain did not finish"))),
                 );
             }
-            if let Some(Err(error)) = log_result {
+            *logs = None;
+            if let Some(Err(error)) = log_result.take() {
                 failure = Some(error.to_string());
             }
-            session.cleanup_complete = true;
-            session.state = if expected && failure.is_none() {
+            if !expected
+                && failure.is_none()
+                && session.retry_count < session.retry.unwrap_or(0)
+                && signal.load(Ordering::Relaxed) == 0
+            {
+                let delay = Duration::from_secs((1u64 << session.retry_count.min(5)).min(30));
+                session.state = Status::Retrying;
+                session.ssh_pid = None;
+                session.retry_at = Some(state::now() + delay.as_secs());
+                session.target_checks.clear();
+                session.target = "unverified".into();
+                session.forwarding = "unverified".into();
+                let message = format!(
+                    "SSH exited: {status}; retry {}/{} in {}s",
+                    session.retry_count + 1,
+                    session.retry.unwrap_or(0),
+                    delay.as_secs()
+                );
+                session.error = Some(message.clone());
+                session.updated_at = state::now();
+                ssh::note(paths, session, &message, foreground)?;
+                paths.save(session)?;
+                retry_deadline = Some(Instant::now() + delay);
+            } else {
+                session.state = if expected && failure.is_none() {
+                    Status::Closed
+                } else {
+                    Status::Failed
+                };
+                session.error = failure.take().or_else(|| {
+                    (!expected).then(|| {
+                        let limit = if session.retry.is_some() {
+                            "; retry limit reached"
+                        } else {
+                            ""
+                        };
+                        format!("SSH exited unexpectedly: {status}{limit}")
+                    })
+                });
+                if startup_pending && session.state == Status::Failed {
+                    return Err(Error::with_code(
+                        status.code().filter(|code| *code > 0).unwrap_or(1),
+                        session.error.clone().expect("failed SSH has an error"),
+                    ));
+                }
+                break;
+            }
+        }
+        if startup_pending {
+            acknowledge(session, foreground, startup_stream)?;
+            startup_pending = false;
+        }
+        let mut requested_close = false;
+        accept_requests(
+            paths,
+            listener,
+            session,
+            ssh.as_ref(),
+            Some(&mut requested_close),
+            &mut waiting,
+        )?;
+        if requested_close && session.state != Status::Closing {
+            begin_close(paths, session, ssh.as_ref(), &mut shutdown_deadline)?;
+            retry_deadline = None;
+        }
+        if session.state == Status::Closing && ssh.is_none() {
+            session.state = if failure.is_none() {
                 Status::Closed
             } else {
                 Status::Failed
             };
-            session.error = failure
-                .or_else(|| (!expected).then(|| format!("SSH exited unexpectedly: {status}")));
+            session.error = failure.take();
+            break;
+        }
+        if retry_deadline.is_some_and(|end| Instant::now() >= end)
+            && session.state == Status::Retrying
+        {
+            // Process cancellation before replacing the child, including signals received during IPC.
+            if signal.load(Ordering::Relaxed) != 0 {
+                continue;
+            }
+            session.retry_count += 1;
+            ssh::note(
+                paths,
+                session,
+                &format!(
+                    "starting SSH retry {}/{}",
+                    session.retry_count,
+                    session.retry.unwrap_or(0)
+                ),
+                foreground,
+            )?;
+            let mut child = OwnedSsh::spawn(session)?;
+            session.ssh_pid = Some(child.pid());
+            // Retain ownership before opening logs so error cleanup still reaps this child.
+            let child_logs = child.logs(paths, session, foreground);
+            *ssh = Some(child);
+            *logs = Some(child_logs?);
+            session.state = Status::Running;
+            session.retry_at = None;
+            session.error = None;
+            session.exit_code = None;
+            session.exit_signal = None;
             session.updated_at = state::now();
             paths.save(session)?;
-            for (mut stream, request) in waiting.drain(..) {
-                let _ = control::respond(&mut stream, &request, session, None);
-            }
-            let until = Instant::now() + Duration::from_millis(150);
-            while Instant::now() < until {
-                accept_requests(paths, listener, session, None, None, &mut waiting)?;
-                wait_listener(listener, 25)?;
-            }
-            return Ok(if received_signal == SIGINT as usize {
-                130
-            } else if received_signal == SIGTERM as usize {
-                143
-            } else if session.state == Status::Closed {
-                0
-            } else {
-                status.code().filter(|c| *c > 0).unwrap_or(1)
-            });
+            retry_deadline = None;
+            log_result = None;
         }
-        if deadline.is_some_and(|end| Instant::now() >= end) {
+        if shutdown_deadline.is_some_and(|end| Instant::now() >= end) {
             if !killed {
-                ssh.signal(Signal::SIGKILL)?;
+                if let Some(child) = ssh.as_ref() {
+                    child.signal(Signal::SIGKILL)?;
+                }
                 killed = true;
-                deadline = Some(Instant::now() + Duration::from_secs(2));
+                shutdown_deadline = Some(Instant::now() + Duration::from_secs(2));
             } else {
                 session.error =
                     Some("SSH has not exited after SIGKILL; shutdown remains unconfirmed".into());
@@ -352,36 +438,61 @@ fn run(
                 for (mut stream, request) in waiting.drain(..) {
                     let _ = control::respond(&mut stream, &request, session, session.error.clone());
                 }
-                deadline = None;
+                shutdown_deadline = None;
             }
-        }
-        let mut requested_close = false;
-        accept_requests(
-            paths,
-            listener,
-            session,
-            Some(ssh),
-            Some(&mut requested_close),
-            &mut waiting,
-        )?;
-        if requested_close && session.state != Status::Closing {
-            begin_close(paths, session, ssh, &mut deadline)?;
         }
         wait_listener(listener, 100)?;
     }
+    session.cleanup_complete = true;
+    session.retry_at = None;
+    session.updated_at = state::now();
+    paths.save(session)?;
+    for (mut stream, request) in waiting.drain(..) {
+        let _ = control::respond(&mut stream, &request, session, None);
+    }
+    let until = Instant::now() + Duration::from_millis(150);
+    while Instant::now() < until {
+        accept_requests(paths, listener, session, None, None, &mut waiting)?;
+        wait_listener(listener, 25)?;
+    }
+    Ok(match signal.load(Ordering::Relaxed) as i32 {
+        SIGINT => 130,
+        SIGTERM => 143,
+        _ if session.state == Status::Closed => 0,
+        _ => session.exit_code.filter(|code| *code > 0).unwrap_or(1),
+    })
+}
+
+fn acknowledge(session: &Session, foreground: bool, stream: &mut Option<UnixStream>) -> Result<()> {
+    if let Some(stream) = stream.as_mut() {
+        control::send(stream, &startup(session, None), START_TIMEOUT)?;
+        let commit: Handshake = control::receive(stream, START_TIMEOUT)?;
+        if commit.version != VERSION || commit.session_id != session.id || commit.stage != "commit"
+        {
+            return Err(Error::new("invalid startup commit"));
+        }
+        control::send(stream, &startup(session, None), START_TIMEOUT)?;
+    } else if foreground {
+        print_session(session);
+    }
+    stream.take();
+    Ok(())
 }
 
 fn begin_close(
     paths: &Paths,
     session: &mut Session,
-    ssh: &OwnedSsh,
+    ssh: Option<&OwnedSsh>,
     deadline: &mut Option<Instant>,
 ) -> Result<()> {
     session.state = Status::Closing;
+    session.retry_at = None;
     session.updated_at = state::now();
     paths.save(session)?;
-    ssh.signal(Signal::SIGTERM)?;
-    *deadline = Some(Instant::now() + Duration::from_secs(5));
+    if let Some(ssh) = ssh {
+        ssh.signal(Signal::SIGTERM)?;
+        *deadline = Some(Instant::now() + Duration::from_secs(5));
+    }
     Ok(())
 }
 
@@ -414,16 +525,23 @@ fn accept_requests(
             continue;
         }
         match request.operation {
-            Operation::RecordCheck { port, ref check } => {
+            Operation::RecordCheck {
+                port,
+                ssh_pid,
+                retry_count,
+                ref check,
+            } => {
                 let result = if let Some(ssh) = ssh
                     && session.state == Status::Running
+                    && ssh.pid() == ssh_pid
+                    && session.retry_count == retry_count
                     && !requested_close.as_deref().copied().unwrap_or(false)
                     && !ssh.exited()?
                 {
                     record_check(paths, session, port, check)
                 } else {
                     Err(Error::new(
-                        "session stopped before the target check could be recorded",
+                        "SSH attempt changed or session stopped before the target check could be recorded",
                     ))
                 };
                 let _ = control::respond(

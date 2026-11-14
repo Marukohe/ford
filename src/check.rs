@@ -125,7 +125,12 @@ pub fn run(paths: &Paths, stored: &Session, args: &Check) -> Result<i32> {
     control::query(
         paths,
         &live,
-        Operation::RecordCheck { port, check },
+        Operation::RecordCheck {
+            port,
+            ssh_pid: pid,
+            retry_count: live.retry_count,
+            check,
+        },
         Duration::from_secs(1),
     )
     .map_err(|error| Error::new(format!("cannot record target check: {error}")))?;

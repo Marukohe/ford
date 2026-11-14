@@ -167,6 +167,36 @@ ford devbox 3000 --foreground
 
 Press Ctrl+C to close it.
 
+## Automatic reconnection
+
+Enable reconnection when you create a session:
+
+```bash
+ford devbox 8080:3000 --name web --retry
+ford internal 9000:8000 --jump bastion --name api --retry=10
+```
+
+`--retry` allows five SSH restarts over the session's lifetime. Use `--retry=N` to choose a limit from 0 to 100;
+0 disables retries. Retrying is off by default. Waits increase from 1 to 2, 4, 8, 16, then 30 seconds and stay capped
+at 30 seconds. Starting a new SSH process does not reset the budget.
+
+`ford list` shows `retrying` while waiting and `running` when a replacement SSH process is alive. The session keeps
+its name, ID, and mappings. `ford logs web` retains SSH errors and shows retry attempts. `ford list --json` includes
+the retry limit, attempts used, and the next retry's Unix timestamp when applicable; zero counts are omitted.
+`ford close web` cancels pending retries;
+Ctrl+C does the same in foreground mode.
+
+Reconnection starts after SSH exits. Keepalives already detect an unresponsive SSH connection using a 15-second
+interval and three unanswered probes; there is no fixed session duration. A failed HTTP check alone does not restart
+SSH. After reconnection, existing TCP or WebSocket connections need to be reopened, and `TARGET` returns to
+`unverified` until you run another check.
+
+Retries also cover authentication, host key, and port bind failures: SSH exit codes cannot reliably distinguish them
+from network failures. Trust checks stay enabled, diagnostics remain available, and the session becomes `failed`
+when the budget is exhausted. A missing SSH executable, log failure, or uncertain process cleanup stops the session
+without retrying. Reconnection requires a live supervisor; it does not resume sessions after a reboot or supervisor
+failure. Restart existing sessions with `--retry` to enable it.
+
 ## Save and reopen mapping groups
 
 Save selected sessions together so you can reopen their mappings with one command:
@@ -180,12 +210,13 @@ ford group close work
 ford group open work
 ```
 
-A group keeps the hosts, port mappings, session names, and jump hosts. `group open` creates new background sessions
-and skips matching sessions that are already running. Other sessions are left alone. Known name or port conflicts
+A group keeps the hosts, port mappings, session names, jump hosts, and retry limits. `group open` creates new background
+sessions with fresh retry budgets and skips matching sessions that are already running or retrying. Other sessions
+are left alone. Known name or port conflicts
 must be resolved first; an unreachable session is never replaced automatically.
 
 ```bash
-ford group save work --all --force   # Replace the group with all currently running sessions
+ford group save work --all --force   # Replace the group with all running or retrying sessions
 ford group list                     # List saved groups
 ford group show work                # Inspect saved routes and ports
 ford group remove work              # Delete the saved group; keep its running sessions
@@ -246,7 +277,8 @@ the ports specified in your ford command.
 or agent authentication that works without a password or passphrase prompt.
 
 **A session failed or disappeared from the list.** Run `ford list --all` and `ford logs web`. Logs remain available
-after a session ends. ford does not automatically reconnect; start a new session after resolving the problem.
+after a session ends. Use `--retry` when creating a session to recover from temporary connection loss. If retries
+are disabled or exhausted, start a new session after resolving the problem.
 
 **A session says `unreachable`.** ford cannot contact the process managing that tunnel, so it cannot confirm whether
 the tunnel is still active or close it automatically. Check your local processes before starting a replacement on

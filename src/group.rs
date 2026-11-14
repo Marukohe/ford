@@ -34,6 +34,8 @@ struct SavedSession {
     name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retry: Option<u32>,
 }
 
 impl SavedSession {
@@ -43,6 +45,7 @@ impl SavedSession {
             mappings: session.mappings,
             name: session.name,
             jump: session.jump,
+            retry: session.retry,
         }
     }
 
@@ -52,6 +55,7 @@ impl SavedSession {
             ports: self.mappings.clone(),
             name: self.name.clone(),
             jump: self.jump.clone(),
+            retry: self.retry,
             foreground: false,
         }
     }
@@ -60,6 +64,7 @@ impl SavedSession {
         self.host == session.host
             && self.name == session.name
             && self.jump == session.jump
+            && self.retry.unwrap_or(0) == session.retry.unwrap_or(0)
             && self.mappings.len() == session.mappings.len()
             && self
                 .mappings
@@ -141,7 +146,7 @@ pub fn run(command: GroupCommand) -> Result<i32> {
             let sessions = if all {
                 crate::live_sessions(&paths, paths.sessions()?)
                     .into_iter()
-                    .filter(|session| session.state == Status::Running)
+                    .filter(|session| matches!(session.state, Status::Running | Status::Retrying))
                     .collect()
             } else {
                 sessions
@@ -245,8 +250,11 @@ pub fn run(command: GroupCommand) -> Result<i32> {
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(",");
+                let retry = saved
+                    .retry
+                    .map_or(String::new(), |limit| format!("  retry={limit}"));
                 println!(
-                    "  {}  {route}  {mappings}",
+                    "  {}  {route}  {mappings}{retry}",
                     saved.name.as_deref().unwrap_or("(unnamed)")
                 );
             }
@@ -330,7 +338,7 @@ fn open(paths: &Paths, group: &Group) -> Result<i32> {
     // Reject known conflicts before creating anything. SSH still owns the actual port bind.
     for saved in &group.sessions {
         if let Some(session) = active.iter().find(|session| saved.matches(session)) {
-            if session.state != Status::Running {
+            if !matches!(session.state, Status::Running | Status::Retrying) {
                 return Err(Error::new(format!(
                     "session {} is {}; cannot safely reopen its mappings",
                     session.id,

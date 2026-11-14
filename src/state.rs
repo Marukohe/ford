@@ -27,6 +27,7 @@ pub const SCHEMA: u32 = 1;
 pub enum Status {
     Starting,
     Running,
+    Retrying,
     Closing,
     Closed,
     Failed,
@@ -38,6 +39,7 @@ impl Status {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::Retrying => "retrying",
             Self::Closing => "closing",
             Self::Closed => "closed",
             Self::Failed => "failed",
@@ -55,6 +57,12 @@ pub struct Session {
     pub host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<u32>,
+    #[serde(default, skip_serializing_if = "zero")]
+    pub retry_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<u64>,
     pub mappings: Vec<Mapping>,
     pub state: Status,
     pub created_at: u64,
@@ -110,6 +118,10 @@ impl Session {
 pub struct Paths {
     pub run: PathBuf,
     pub state: PathBuf,
+}
+
+fn zero(value: &u32) -> bool {
+    *value == 0
 }
 
 pub fn now() -> u64 {
@@ -348,6 +360,9 @@ impl Paths {
             name: open.name,
             host: open.host,
             jump: open.jump,
+            retry: open.retry.filter(|limit| *limit != 0),
+            retry_count: 0,
+            retry_at: None,
             mappings: open.ports,
             state: Status::Starting,
             created_at: now(),

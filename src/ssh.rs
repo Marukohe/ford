@@ -8,9 +8,10 @@ use nix::{
     unistd::Pid,
 };
 use std::{
-    fs,
-    io::{Read, Write},
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::mpsc::{Receiver, channel},
     thread,
@@ -130,31 +131,17 @@ impl OwnedSsh {
             .stderr
             .take()
             .ok_or_else(|| Error::new("SSH stderr unavailable"))?;
-        let path = paths.log(&session.id);
-        let mut file = open_private(&path, true, true)?;
+        let mut log = SshLog::open(paths.log(&session.id))?;
         let (tx, rx) = channel();
         thread::spawn(move || {
             let result = (|| -> Result<()> {
-                let mut size = file.metadata()?.len();
                 let mut buffer = [0; 8192];
                 loop {
                     let count = stderr.read(&mut buffer)?;
                     if count == 0 {
                         return Ok(());
                     }
-                    if size + count as u64 > 1024 * 1024 {
-                        let backup = path.with_extension("log.1");
-                        if backup.try_exists()? {
-                            let old = open_private(&backup, false, false)?;
-                            drop(old);
-                            fs::remove_file(&backup)?;
-                        }
-                        fs::rename(&path, &backup)?;
-                        file = open_private(&path, true, true)?;
-                        size = 0;
-                    }
-                    file.write_all(&buffer[..count])?;
-                    size += count as u64;
+                    log.write(&buffer[..count])?;
                     if foreground {
                         let _ = std::io::stderr().write_all(&buffer[..count]);
                     }
@@ -163,6 +150,49 @@ impl OwnedSsh {
             let _ = tx.send(result);
         });
         Ok(rx)
+    }
+}
+
+pub fn note(paths: &Paths, session: &Session, message: &str, foreground: bool) -> Result<()> {
+    let bytes = format!("ford: {message}\n");
+    SshLog::open(paths.log(&session.id))?.write(bytes.as_bytes())?;
+    if foreground {
+        let _ = std::io::stderr().write_all(bytes.as_bytes());
+    }
+    Ok(())
+}
+
+struct SshLog {
+    path: PathBuf,
+    file: File,
+    size: u64,
+}
+
+impl SshLog {
+    fn open(path: PathBuf) -> Result<Self> {
+        let (file, size) = Self::append(&path)?;
+        Ok(Self { path, file, size })
+    }
+
+    fn append(path: &Path) -> Result<(File, u64)> {
+        let mut file = open_private(path, true, true)?;
+        let size = file.seek(SeekFrom::End(0))?;
+        Ok((file, size))
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.size + bytes.len() as u64 > 1024 * 1024 {
+            let backup = self.path.with_extension("log.1");
+            if backup.try_exists()? {
+                drop(open_private(&backup, false, false)?);
+                fs::remove_file(&backup)?;
+            }
+            fs::rename(&self.path, &backup)?;
+            (self.file, self.size) = Self::append(&self.path)?;
+        }
+        self.file.write_all(bytes)?;
+        self.size += bytes.len() as u64;
+        Ok(())
     }
 }
 

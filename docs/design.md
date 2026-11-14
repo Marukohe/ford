@@ -1,8 +1,8 @@
 # ford Design
 
-Status: reviewed and implemented for v0.1. Updated: 2026-10-31. The architecture uses spawn with a Rust supervisor.
-State management, `ford list`, and `ford close` are implemented. Native Linux and macOS session tests and Linux real SSH
-checks are recorded in [validation.md](validation.md).
+Status: implemented through v0.2, with saved groups and bounded reconnection added for the next release.
+Updated: 2026-11-14. The architecture uses spawn with a Rust supervisor. Historical platform checks are recorded in
+[validation.md](validation.md); they do not establish validation of later changes.
 
 ## 1. Goals and Prerequisites
 
@@ -60,7 +60,7 @@ ford CLI ──create──→ ford session supervisor ──spawn──→ ssh 
 Web traffic: browser → ssh → remote service; bypasses Rust
 ```
 
-Each active session has one Rust supervisor and one direct SSH child process. Multiple ports within that session share
+Each active session has one Rust supervisor and at most one direct SSH child process. Multiple ports within it share
 the SSH connection. The supervisor owns the `Child` handle, live state, and control socket, and explicitly waits for,
 terminates, and reaps SSH.[1]
 
@@ -108,8 +108,9 @@ ford --help
 ford --version
 ```
 
-Creation syntax: `ford <HOST> <PORT|LOCAL:REMOTE>... [--jump HOST] [--name NAME] [--foreground]`. Also provide the
-explicit form `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, `group`, and `logs` are reserved.
+Creation syntax: `ford <HOST> <PORT|LOCAL:REMOTE>... [--jump HOST] [--name NAME] [--retry[=N]] [--foreground]`.
+The explicit form is `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, `group`, and `logs` are
+reserved.
 For an SSH alias with a reserved name, use the explicit form, such as `ford open list 3000`.
 
 - `HOST` accepts SSH configuration aliases, hostnames, IPv4 addresses, and `user@host`. Use an SSH configuration alias
@@ -130,8 +131,8 @@ For an SSH alias with a reserved name, use the explicit form, such as `ford open
   support list/close from another terminal.
 - `--name` is optional; every session has a unique ID that is never reused. Restrict the name character set and never
   use names to construct paths. Reject an active name conflict for the current user instead of overwriting the session.
-- State management, shutdown, and logs are included in the first release. Automatic reconnection, browser opening, port
-  selection, and LAN binding options come later.
+- `--retry` enables up to five SSH restarts; `--retry=N` selects 0 through 100. Absence or zero disables retrying.
+  Browser opening, automatic port selection, and LAN binding options remain outside the current implementation.
 
 Example background creation output:
 
@@ -207,8 +208,9 @@ configured programs. ford neither interpolates the supplied host into a command 
 
 ```text
 starting → running → closing → closed
-    │         │         │
-    └─────────┴─────────┴──→ failed
+              ↕          ↑
+           retrying ──────┘
+starting / running / retrying / closing → failed
 ```
 
 - **State: `starting`**
@@ -216,14 +218,18 @@ starting → running → closing → closed
 - **State: `running`**
   - Meaning supported by evidence: The supervisor owns an SSH child that has not exited. This state does not establish
     forwarding or target availability.
+- **State: `retrying`**
+  - Meaning supported by evidence: The previous SSH attempt was cleaned up and reaped; the same supervisor is waiting
+    to start another attempt. There is no current SSH PID. Names and requested ports remain reserved in ford's index,
+    although the OS listener is absent and another process could bind it.
 - **State: `closing`**
   - Meaning supported by evidence: Shutdown has been accepted; child termination and reaping are in progress
 - **State: `closed`**
   - Meaning supported by evidence: The user requested closure, the owned SSH child has exited and been reaped, and
     normal cleanup is complete
 - **State: `failed`**
-  - Meaning supported by evidence: Startup failed, SSH exited unexpectedly, or cleanup failed; exit details and logs are
-    retained
+  - Meaning supported by evidence: Startup failed, retrying is disabled or exhausted, or cleanup failed; exit details
+    and logs are retained
 - **State: `unreachable`**
   - Meaning supported by evidence: The CLI could not contact the supervisor within the deadline; live state is unknown.
     This is an observation, not proof of process exit
@@ -251,8 +257,10 @@ listener before and after the request. `curl` makes the HTTP request with a thre
 proxies, user curl configuration, or redirect following. These system tools supply listener ownership and HTTP handling
 that the Rust standard library does not provide. They are needed only for `ford check` and add no work to idle sessions.
 
-The CLI submits the observation through the existing private control socket. The supervisor accepts it only for a
-matching mapping in a running session, and persists the result atomically. The probe itself runs outside the
+The CLI submits the observation through the existing private control socket, including the SSH PID and retry count
+observed before the probe. The supervisor accepts it only for the same attempt and a matching mapping in a running
+session, and persists the result atomically. The retry count rejects stale observations even if a PID is reused.
+The probe itself runs outside the
 supervisor, so a slow HTTP response does not delay status or close requests. The result and Unix timestamp are kept
 per local port in `target_checks`; the request path and response body are not stored. Text output shows the result age.
 Completed sessions retain check history. An unverified listener produces an error and leaves that history intact.
@@ -262,7 +270,8 @@ Completed sessions retain check history. An unverified listener produces an erro
 Background creation first allocates an ID, reserves the name, records `starting`, and launches the supervisor. The
 supervisor establishes its control socket, spawns SSH, updates state, and acknowledges through the startup pipe. The CLI
 returns the ID after acknowledgment. Exit 0 means the session creation request was accepted, not that the tunnel is
-ready. If SSH has already failed, return a failure and the log location.
+ready. If SSH has already failed and no retry is scheduled, return a failure and the log location. With retrying
+enabled, creation may acknowledge a session already waiting in `retrying`.
 
 Startup exchanges have a 10-second timeout. On timeout, print the allocated session ID and direct the user to list
 to verify the outcome rather than blindly creating another session. If the startup pipe disconnects before
@@ -271,8 +280,8 @@ cancels the incomplete startup and cleans up; do not leave an unreported active 
 
 `ford close <ID|NAME>` sends a control request. The supervisor that owns the child performs shutdown:
 
-1. Enter `closing` through serialized state handling and reject new startup actions. Merge concurrent close requests
-   into the same shutdown operation.
+1. Enter `closing` through serialized state handling and cancel pending retries. Merge concurrent close requests
+   into the same shutdown operation. During backoff, close directly after confirming no child remains.
 2. Send SIGTERM to the owned SSH process group and wait up to 5 seconds.
 3. If it has not exited, send SIGKILL to the still-owned process group, then wait for and reap the direct SSH child.
 4. Confirm cleanup, persist the terminal state, respond to requests, remove the control socket, and exit the supervisor.
@@ -306,13 +315,35 @@ perform cleanup.
 - **Situation: Background creation accepted**
   - CLI behavior: Return the ID and exit 0; show later errors through list/logs
 - **Situation: Foreground SSH exits unexpectedly**
-  - CLI behavior: Preserve original SSH exit details and return nonzero; user Ctrl+C exits 130 after cleanup
+  - CLI behavior: Apply the configured retry policy, preserving diagnostics. On exhaustion, return the last SSH exit
+    code, or 1 for a signal or unexpected exit 0; user Ctrl+C exits 130 after cleanup
 - **Situation: Close cannot find a session, lacks permission, times out over IPC, or fails to shut down**
   - CLI behavior: Return nonzero with a specific reason; unknown state is not successful closure
 
-Keepalives use a 15-second interval and a maximum of 3 unanswered probes to detect an unresponsive SSH connection. They
-are neither HTTP health checks nor automatic reconnection. In the first release, an unexpected SSH exit records
-`failed`, retains the terminal snapshot and logs, and ends the supervisor.[3]
+Keepalives use a 15-second interval and a maximum of 3 unanswered probes to detect an unresponsive SSH connection.
+They do not establish HTTP health. Reconnection starts only after SSH exits.[3]
+
+### Bounded Reconnection
+
+Retrying is opt-in. `--retry` allows five replacement SSH processes, and `--retry=N` selects 0 through 100.
+The budget covers the entire session lifetime; it does not reset when a child remains alive. Process liveness alone
+cannot establish a successful SSH connection. Backoff waits are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds.
+Use monotonic deadlines for scheduling and a Unix timestamp only for display.
+
+An unexpected SSH exit, including exit 0 or 255, is eligible while budget remains. Do not classify network,
+authentication, host key, or port bind errors by parsing stderr. All remain visible and consume the same finite
+budget. No trust or authentication settings change between attempts. Spawn errors, log failures, or uncertain
+cleanup stop the session without retrying.
+
+Before scheduling another attempt, terminate remaining owned process-group helpers, reap the direct child, and drain
+its logs. Keep the same session ID, supervisor, and socket. In `retrying`, clear `ssh_pid`, clear target observations,
+reset `target` and `forwarding` to `unverified`, and retain the previous exit details and retry reason. Increment
+`retry_count` when starting a replacement; set its PID and return to `running` without claiming connection readiness.
+On exhaustion, persist `failed` with the final SSH exit and stop the supervisor.
+
+Status and close remain available during backoff. Process close requests and termination signals before starting a
+replacement. Explicit shutdown never triggers reconnection. Existing TCP and WebSocket connections break; only new
+connections can use the replacement tunnel. Existing sessions must be restarted with a retry policy to enable it.
 
 SIGKILL, a system crash, or an inability to write state can prevent cleanup, and SSH may remain running. List reports
 `unreachable`; close returns an uncertainty error instead of forcibly killing a PID from disk. The first release does
@@ -335,7 +366,9 @@ ac13e2...  api   devbox  9000:9000       unreachable  unverified
 ```
 
 IDs may be abbreviated for display. Commands accept unique prefixes and must reject ambiguous matches. Record the host,
-mappings, name, creation/update times, supervisor PID, SSH PID, exit code/signal, error summary, and log path. PIDs are
+mappings, name, creation/update times, supervisor PID, SSH PID, exit code/signal, error summary, and log path. Optional
+`retry` holds the lifetime limit, `retry_count` counts replacements started, and `retry_at` gives the next attempt's
+Unix timestamp. Default values are omitted from JSON. PIDs are
 diagnostic information, not proof of control authority.
 
 ### Control Protocol
@@ -377,6 +410,8 @@ other SSH connections.
 Continuously drain SSH stderr into bounded session logs; in foreground mode, also stream it to the terminal. A full pipe
 must not stall SSH. `ford logs <ID|NAME>` shows the latest 200 lines by default and works after the supervisor exits.
 Cap each session log at 1 MiB with one rotated backup to prevent unlimited growth.
+Append diagnostics across SSH attempts and include retry scheduling and start markers. Only append markers between
+attempts after the old log writer has finished; never interleave independent rotating writers.
 
 Do not log passwords, private key contents, the complete environment, or agent data. Preserve original SSH diagnostics.
 Structured state supplements exit information; unreliable classification of stderr text must not replace the original
@@ -385,22 +420,25 @@ errors.
 ## 7. Saved Mapping Groups
 
 `ford group save NAME SESSION...` snapshots selected configurations, including completed sessions. `--all` saves
-only sessions confirmed running through live status queries. Existing groups require `--force` for replacement.
+only sessions confirmed running or retrying through live status queries. Existing groups require `--force` for
+replacement.
 `group list [--json]` and `group show NAME` inspect saved groups; `group remove NAME` deletes a group without closing
 its sessions. Group names follow session-name validation.
 
 Groups contain a schema version, name, save timestamp, and saved sessions. Each entry contains only its SSH host,
-port mappings, optional session name, and optional jump host. Process IDs, session IDs, logs, and health observations
-are excluded. Reopening uses the current SSH configuration and creates fresh session IDs.
+port mappings, optional session name, optional jump host, and optional retry limit. Process IDs, session IDs, retry
+counters, logs, and health observations are excluded. Reopening uses the current SSH configuration and creates fresh
+session IDs and retry budgets.
 
 Store groups under the private state directory in `groups/NAME.json`. Use owner-only files, reject symlinks and unsafe
 ownership or permissions, and publish updates by atomic rename. Limit group files to 64 KiB and each saved session
 configuration to 32 KiB, leaving room for lifecycle metadata and protocol envelopes. Revalidate all fields on read.
 Reject empty groups, duplicate session names, and overlapping local ports within a group.
 
-`ford group open NAME` queries current sessions before launching anything. Matching running configurations are
-reused; names, host, jump host, and mappings must match. Known conflicting names or local ports, and matching
-unreachable/closing sessions, cause an error before new sessions are created. SSH still determines actual bind success.
+`ford group open NAME` queries current sessions before launching anything. Matching running or retrying configurations
+are reused; names, host, jump host, retry limits, and mappings must match. Known conflicting names or local ports,
+and matching unreachable/closing sessions, cause an error before new sessions are created. SSH still determines actual
+bind success.
 New sessions launch independently; synchronous launch errors are reported with a nonzero aggregate exit code, and
 successful launches remain running. SSH can fail after startup acknowledgment; report that through ordinary session
 state and logs. This is not an atomic transaction or automatic orphan recovery.
@@ -419,8 +457,14 @@ anonymous mappings; different groups can launch independently and ordinary SSH b
   - Scope: Spawn-based supervision, foreground/background modes, multiple ports, list, close, logs
   - Requirements: Implement truthful state, process ownership, concurrency, and cleanup together
 - **Stage: v0.2**
-  - Scope: `--retry`, optional `--open`, remote target address and local bind options
-  - Requirements: Define retry policy, optional periodic checks, and exposure boundaries
+  - Scope: On-demand HTTP target checks and explicit SSH jump hosts
+  - Requirements: Keep health separate from liveness and retain final-target semantics
+- **Stage: Next release**
+  - Scope: Saved mapping groups and bounded `--retry`
+  - Requirements: Preserve ownership, cancel retries promptly, and invalidate checks across attempts
+- **Stage: Future options**
+  - Scope: Optional `--open`, remote target address, local bind options, and periodic checks
+  - Requirements: Define exposure boundaries and health policies before implementation
 - **Stage: Later**
   - Scope: Abnormal session recovery and history cleanup
   - Requirements: Never treat metadata cleanup as process shutdown
@@ -428,12 +472,7 @@ anonymous mappings; different groups can launch independently and ordinary SSH b
   - Scope: ford-owned SSH connection sharing, native Windows support
   - Requirements: Validate lifecycle and platform behavior independently
 
-Reconnection will use capped exponential backoff and allow immediate cancellation. Common SSH exit codes alone cannot
-distinguish network, authentication, and host key errors. Do not retry indefinitely on exit 255 or rely solely on
-English stderr text for classification. Define the exact policy in that release's design.
-
-Reconnection restores the ability to create new connections; existing TCP/WebSocket connections break. Do not promise
-seamless session recovery. If connection sharing is introduced, use ford-owned control sockets and never terminate
+If connection sharing is introduced, use ford-owned control sockets and never terminate
 masters shared by the user's other terminals.
 
 ## 9. Project Structure and Validation
