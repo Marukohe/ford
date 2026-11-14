@@ -4,12 +4,20 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+## [0.3.0]
+
 ### Added
 
 - Save named groups of session mappings and reopen them with one command, including jump hosts.
 - List, inspect, update, close, and remove groups without replacing unrelated or unreachable sessions.
 - Reconnect SSH sessions with opt-in `--retry[=N]`, bounded exponential backoff, and cancellable retry waits.
 - Keep retry policies in saved groups and invalidate target checks when replacing an SSH attempt.
+
+### Upgrade Notes
+
+- Retry support is opt-in. Restart existing sessions with `--retry` or `--retry=N` to enable it.
+- Restart sessions created by older versions before using `ford check` with the updated CLI.
+- Reconnection restores new connections; existing TCP and WebSocket connections must reopen.
 
 ## [0.2.0]
 

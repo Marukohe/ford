@@ -1,6 +1,6 @@
 # ford Design
 
-Status: implemented through v0.2, with saved groups and bounded reconnection added for the next release.
+Status: implemented through v0.3, including saved groups and bounded reconnection.
 Updated: 2026-11-14. The architecture uses spawn with a Rust supervisor. Historical platform checks are recorded in
 [validation.md](validation.md); they do not establish validation of later changes.
 
@@ -459,7 +459,7 @@ anonymous mappings; different groups can launch independently and ordinary SSH b
 - **Stage: v0.2**
   - Scope: On-demand HTTP target checks and explicit SSH jump hosts
   - Requirements: Keep health separate from liveness and retain final-target semantics
-- **Stage: Next release**
+- **Stage: v0.3**
   - Scope: Saved mapping groups and bounded `--retry`
   - Requirements: Preserve ownership, cancel retries promptly, and invalidate checks across attempts
 - **Stage: Future options**

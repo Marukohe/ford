@@ -24,7 +24,7 @@ building release archives.
 
 The `scripts/install.sh` script downloads compiled release archives. It reads the latest release's `SHA256SUMS`
 through GitHub's stable download URL, selects the native target, then downloads that exact version's archive. A
-specific version can be selected with `--version v0.2.0`. It does not use the GitHub API or require Rust on the user's
+specific version can be selected with `--version v0.3.0`. It does not use the GitHub API or require Rust on the user's
 machine. See
 [GitHub's release links](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases).
 
@@ -47,26 +47,26 @@ python3 -m unittest discover -s scripts -p 'test_install.py' -v
 For a specific version or installation directory, run the script with options:
 
 ```bash
-sh scripts/install.sh --version v0.2.0 --bin-dir "$HOME/bin"
+sh scripts/install.sh --version v0.3.0 --bin-dir "$HOME/bin"
 ```
 
 ## Publish a Release
 
-`Cargo.toml` and `Cargo.lock` currently identify version 0.2.0. Its release notes are in CHANGELOG.md.
+`Cargo.toml` and `Cargo.lock` currently identify version 0.3.0. Its release notes are in CHANGELOG.md.
 Review that entry, commit any edits, and push the branch before the tag:
 
 ```bash
-python3 scripts/release.py check-version v0.2.0
-python3 scripts/release.py notes v0.2.0 --output target/release-notes.md
+python3 scripts/release.py check-version v0.3.0
+python3 scripts/release.py notes v0.3.0 --output target/release-notes.md
 cat target/release-notes.md
 
 git push origin main
-git tag -a v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "Release v0.3.0"
+git push origin v0.3.0
 ```
 
 Pushing the tag triggers CI, builds, notes, checksums, and publication. A tag must exactly match `v` followed by the
-Cargo package version. Prerelease versions such as `0.2.0-rc.1` are published as prereleases and are not marked latest.
+Cargo package version. Prerelease versions such as `0.3.0-rc.1` are published as prereleases and are not marked latest.
 Do not move an existing published tag to a different commit; prepare a new version instead.
 
 ## Release Assets
@@ -74,10 +74,10 @@ Do not move an existing published tag to a different commit; prepare a new versi
 Each release has four archives plus SHA256SUMS:
 
 ```text
-ford-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
-ford-v0.2.0-aarch64-unknown-linux-gnu.tar.gz
-ford-v0.2.0-x86_64-apple-darwin.tar.gz
-ford-v0.2.0-aarch64-apple-darwin.tar.gz
+ford-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+ford-v0.3.0-aarch64-unknown-linux-gnu.tar.gz
+ford-v0.3.0-x86_64-apple-darwin.tar.gz
+ford-v0.3.0-aarch64-apple-darwin.tar.gz
 SHA256SUMS
 ```
 
@@ -99,7 +99,7 @@ sha256sum --check SHA256SUMS
 # macOS equivalent
 shasum -a 256 --check SHA256SUMS
 
-tar -xzf ford-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf ford-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
 ./ford --version
 ```
 
@@ -121,24 +121,24 @@ Install the same git-cliff version used by CI when preparing the next changelog:
 cargo install git-cliff --version 2.13.0 --locked
 ```
 
-To prepare 0.2.1:
+To prepare 0.3.1:
 
-1. Update `package.version` in Cargo.toml to `0.2.1`.
+1. Update `package.version` in Cargo.toml to `0.3.1`.
 2. Run `cargo check` to update the root package version in Cargo.lock.
 3. Generate only the new entry, preserving previously curated release history:
 
    ```bash
-   git-cliff --config cliff.toml --unreleased --tag v0.2.1 --prepend CHANGELOG.md
+   git-cliff --config cliff.toml --unreleased --tag v0.3.1 --prepend CHANGELOG.md
    ```
 
 4. Review the generated entry and edit it for users. Commit the version files and changelog:
 
    ```bash
    git add Cargo.toml Cargo.lock CHANGELOG.md
-   git commit -m "chore(release): prepare v0.2.1"
+   git commit -m "chore(release): prepare v0.3.1"
    git push origin main
-   git tag -a v0.2.1 -m "Release v0.2.1"
-   git push origin v0.2.1
+   git tag -a v0.3.1 -m "Release v0.3.1"
+   git push origin v0.3.1
    ```
 
 The release workflow extracts the matching CHANGELOG.md section, preserving edits. If no matching section exists,
@@ -151,9 +151,9 @@ Run the native build and helpers without creating a tag or contacting GitHub. Th
 
 ```bash
 cargo build --release --locked --target x86_64-unknown-linux-gnu
-python3 scripts/release.py package v0.2.0 x86_64-unknown-linux-gnu --output target/dist
-python3 scripts/release.py checksums v0.2.0 --directory target/dist --target x86_64-unknown-linux-gnu
-tar -tzf target/dist/ford-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+python3 scripts/release.py package v0.3.0 x86_64-unknown-linux-gnu --output target/dist
+python3 scripts/release.py checksums v0.3.0 --directory target/dist --target x86_64-unknown-linux-gnu
+tar -tzf target/dist/ford-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
 python3 -m unittest discover -s scripts -p 'test_release.py' -v
 ```
 
