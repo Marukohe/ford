@@ -371,6 +371,46 @@ Host *
             assert ford("logs", "jump-noauth").stdout.strip()
             check("jump authentication failure retains SSH diagnostics")
 
+            group_local, group_remote = free_port(), free_port()
+            ford("good", f"{group_local}:{target}", "--name", "group-web")
+            ford("internal", f"{group_remote}:{target}", "--jump", "good", "--name", "group-api")
+            wait_for(lambda: fetch(group_local) == PAYLOAD and fetch(group_remote) == PAYLOAD,
+                     "group source forwarding")
+            ford("check", "group-web", "--http", "/", "--expect-status", 200)
+            before = {item["id"] for item in sessions()}
+            ford("group", "save", "work", "group-web", "group-api")
+            ford("group", "close", "work")
+            wait_for(lambda: released(group_local) and released(group_remote), "group port release")
+            ford("group", "open", "work")
+            wait_for(lambda: fetch(group_local) == PAYLOAD and fetch(group_remote) == PAYLOAD,
+                     "restored group forwarding")
+            restored = {item["name"]: item for item in sessions()
+                        if item["name"] in ["group-web", "group-api"] and item["state"] == "running"}
+            assert len(restored) == 2 and all(item["id"] not in before for item in restored.values())
+            assert restored["group-api"]["jump"] == "good" and restored["group-web"]["target"] == "unverified"
+            count = len(sessions())
+            assert "already running 2" in ford("group", "open", "work").stdout
+            assert len(sessions()) == count
+            ford("group", "close", "work")
+            wait_for(lambda: released(group_local) and released(group_remote), "restored group cleanup")
+            ford("group", "remove", "work")
+            check("saved groups restore multiple routes with new session IDs and no stale health results")
+
+            failed_local = free_port()
+            ford("noauth", f"{failed_local}:{target}", "--name", "group-bad", check=False)
+            wait_for(lambda: failed("group-bad"), "failed group template")
+            ford("group", "save", "partial", state("group-bad")["id"], restored["group-web"]["id"])
+            before = {item["id"] for item in sessions()}
+            ford("group", "open", "partial", check=False)
+            wait_for(lambda: fetch(group_local) == PAYLOAD, "successful entry in partial group")
+            wait_for(lambda: any(item["id"] not in before and item["name"] == "group-bad"
+                                 and item["state"] == "failed" for item in sessions()),
+                     "failed entry in partial group")
+            ford("group", "close", "partial")
+            wait_for(lambda: released(group_local), "partial group cleanup")
+            ford("group", "remove", "partial")
+            check("one failed group entry does not stop successful entries")
+
             with socket.socket() as occupied:
                 occupied.bind(("127.0.0.1", 0))
                 occupied.listen()

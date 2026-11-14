@@ -2,6 +2,13 @@
 
 Notable changes in each version of ford.
 
+## [Unreleased]
+
+### Added
+
+- Save named groups of session mappings and reopen them with one command, including jump hosts.
+- List, inspect, update, close, and remove groups without replacing unrelated or unreachable sessions.
+
 ## [0.2.0]
 
 ### Added

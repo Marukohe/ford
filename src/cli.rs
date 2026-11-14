@@ -39,12 +39,47 @@ pub enum Action {
     },
     /// Check an HTTP endpoint through an existing session
     Check(Check),
+    /// Save and reopen named sets of sessions
+    Group {
+        #[command(subcommand)]
+        command: GroupCommand,
+    },
     /// Show recent SSH diagnostics
     Logs {
         target: String,
         #[arg(long, default_value_t = 200, value_parser = clap::value_parser!(u32).range(1..=10000))]
         lines: u32,
     },
+}
+
+#[derive(Subcommand)]
+pub enum GroupCommand {
+    /// Save session mappings for later use
+    Save {
+        name: String,
+        /// Session names, IDs, or unique ID prefixes (completed sessions are accepted)
+        #[arg(required_unless_present = "all", conflicts_with = "all", num_args = 1..)]
+        sessions: Vec<String>,
+        /// Save all currently running sessions
+        #[arg(long)]
+        all: bool,
+        /// Replace an existing saved group
+        #[arg(long)]
+        force: bool,
+    },
+    /// Reopen saved sessions in the background; skip matching running sessions
+    Open { name: String },
+    /// Close current sessions that match the saved mappings
+    Close { name: String },
+    /// List saved groups
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the sessions saved in a group
+    Show { name: String },
+    /// Delete saved mappings without closing sessions
+    Remove { name: String },
 }
 
 #[derive(Args)]
@@ -95,7 +130,7 @@ pub fn parse() -> Cli {
     let mut args: Vec<OsString> = std::env::args_os().collect();
     if let Some(first) = args.get(1).and_then(|s| s.to_str())
         && !first.starts_with('-')
-        && !["open", "list", "close", "check", "logs", "help"].contains(&first)
+        && !["open", "list", "close", "check", "group", "logs", "help"].contains(&first)
     {
         args.insert(1, OsString::from("open"));
     }

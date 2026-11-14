@@ -109,7 +109,7 @@ ford --version
 ```
 
 Creation syntax: `ford <HOST> <PORT|LOCAL:REMOTE>... [--jump HOST] [--name NAME] [--foreground]`. Also provide the
-explicit form `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, and `logs` are reserved subcommands.
+explicit form `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, `group`, and `logs` are reserved.
 For an SSH alias with a reserved name, use the explicit form, such as `ford open list 3000`.
 
 - `HOST` accepts SSH configuration aliases, hostnames, IPv4 addresses, and `user@host`. Use an SSH configuration alias
@@ -382,7 +382,38 @@ Do not log passwords, private key contents, the complete environment, or agent d
 Structured state supplements exit information; unreliable classification of stderr text must not replace the original
 errors.
 
-## 7. Future Releases
+## 7. Saved Mapping Groups
+
+`ford group save NAME SESSION...` snapshots selected configurations, including completed sessions. `--all` saves
+only sessions confirmed running through live status queries. Existing groups require `--force` for replacement.
+`group list [--json]` and `group show NAME` inspect saved groups; `group remove NAME` deletes a group without closing
+its sessions. Group names follow session-name validation.
+
+Groups contain a schema version, name, save timestamp, and saved sessions. Each entry contains only its SSH host,
+port mappings, optional session name, and optional jump host. Process IDs, session IDs, logs, and health observations
+are excluded. Reopening uses the current SSH configuration and creates fresh session IDs.
+
+Store groups under the private state directory in `groups/NAME.json`. Use owner-only files, reject symlinks and unsafe
+ownership or permissions, and publish updates by atomic rename. Limit group files to 64 KiB and each saved session
+configuration to 32 KiB, leaving room for lifecycle metadata and protocol envelopes. Revalidate all fields on read.
+Reject empty groups, duplicate session names, and overlapping local ports within a group.
+
+`ford group open NAME` queries current sessions before launching anything. Matching running configurations are
+reused; names, host, jump host, and mappings must match. Known conflicting names or local ports, and matching
+unreachable/closing sessions, cause an error before new sessions are created. SSH still determines actual bind success.
+New sessions launch independently; synchronous launch errors are reported with a nonzero aggregate exit code, and
+successful launches remain running. SSH can fail after startup acknowledgment; report that through ordinary session
+state and logs. This is not an atomic transaction or automatic orphan recovery.
+
+`ford group close NAME` closes only current sessions whose configuration matches a saved entry, using the existing
+supervisor control channel. Groups are reusable templates, so the same matching session can be represented in several
+groups. Closing it affects that shared session. Removing or updating a group changes only its saved configuration.
+
+Serialize operations on one group with a retained private lock file. Keep these locks separate from the session
+registry lock, which is released before supervisor startup. Concurrent opens of the same group cannot duplicate
+anonymous mappings; different groups can launch independently and ordinary SSH bind failures remain possible.
+
+## 8. Future Releases
 
 - **Stage: v0.1**
   - Scope: Spawn-based supervision, foreground/background modes, multiple ports, list, close, logs
@@ -391,7 +422,7 @@ errors.
   - Scope: `--retry`, optional `--open`, remote target address and local bind options
   - Requirements: Define retry policy, optional periodic checks, and exposure boundaries
 - **Stage: Later**
-  - Scope: Named forwarding configurations, abnormal session recovery, history cleanup
+  - Scope: Abnormal session recovery and history cleanup
   - Requirements: Never treat metadata cleanup as process shutdown
 - **Stage: As needed**
   - Scope: ford-owned SSH connection sharing, native Windows support
@@ -405,7 +436,7 @@ Reconnection restores the ability to create new connections; existing TCP/WebSoc
 seamless session recovery. If connection sharing is introduced, use ford-owned control sockets and never terminate
 masters shared by the user's other terminals.
 
-## 8. Project Structure and Validation
+## 9. Project Structure and Validation
 
 Start implementation with one Cargo binary crate. Split into `cli`, `mapping`, `ssh`, `supervisor`, `control`, and
 `state` modules as needed. Do not build a multi-crate workspace or generic backend abstraction in advance. Commit the
@@ -427,7 +458,7 @@ levels:
 Default tests must not require personal host aliases or public network access. Report Linux and macOS validation
 separately. Static inspection or a test on one platform does not establish cross-platform success.
 
-## 9. Performance Validation
+## 10. Performance Validation
 
 Do not state timings, memory use, binary sizes, or throughput figures before measuring them. For the initial
 implementation, record the platform, Rust/OpenSSH versions, build configuration, and test conditions. At minimum,
@@ -445,7 +476,7 @@ compare:
 Establish a default release baseline before measuring the size and startup effects of LTO, stripping, or optimization
 levels. Do not sacrifice authentication, trust verification, truthful state, or cleanup to improve performance figures.
 
-## 10. Agreed Scope
+## 11. Agreed Scope
 
 Rust with system SSH and a retained spawn-based supervisor is agreed. List/close belong in the first release and must
 not be removed to reduce initial scope or overhead.

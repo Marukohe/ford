@@ -39,8 +39,9 @@ impl Fixture {
 # Publish fixture files only after their contents are complete.
 publish() {
   fixture_file=$1
+  fixture_temp=$fixture_file.$$.tmp
   shift
-  printf '%s\n' "$@" > "$fixture_file.tmp" && mv "$fixture_file.tmp" "$fixture_file"
+  printf '%s\n' "$@" > "$fixture_temp" && mv "$fixture_temp" "$fixture_file"
 }
 printf 'SSH fixture diagnostic\n' >&2
 publish "$FORD_TEST_ARGS" "$@"
@@ -228,6 +229,8 @@ fn invalid_input_has_no_side_effects() {
     assert!(!f.output(&["close"]).status.success());
     f.ok(&["open", "list", "3000", "--name", "reserved"]);
     f.ok(&["close", "reserved"]);
+    f.ok(&["open", "group", "3001", "--name", "reserved-group"]);
+    f.ok(&["close", "reserved-group"]);
 }
 
 #[test]
@@ -388,6 +391,7 @@ fn unreachable_supervisor_is_never_closed_by_disk_pid() {
     let f = Fixture::new();
     f.ok(&["devbox", "3000", "--name", "lost"]);
     let session = f.wait_state("lost", "running");
+    f.ok(&["group", "save", "lost-group", "lost"]);
     let supervisor = session["supervisor_pid"].as_i64().unwrap() as i32;
     let ssh = session["ssh_pid"].as_i64().unwrap() as i32;
     // The fixture publishes args after its startup diagnostic. Killing the reader earlier can SIGPIPE the fixture.
@@ -396,6 +400,9 @@ fn unreachable_supervisor_is_never_closed_by_disk_pid() {
     let lost = f.wait_state("lost", "unreachable");
     assert_eq!(lost["cleanup_complete"], false);
     assert!(!f.output(&["close", "lost"]).status.success());
+    assert!(!f.output(&["group", "open", "lost-group"]).status.success());
+    assert!(!f.output(&["group", "close", "lost-group"]).status.success());
+    assert_eq!(f.sessions().len(), 1);
     assert!(
         kill(Pid::from_raw(ssh), None).is_ok(),
         "close killed an unowned PID"
@@ -550,4 +557,247 @@ fn invalid_control_messages_do_not_close_the_session() {
     drop(oversized);
     assert_eq!(f.session("protocol")["state"], "running");
     f.ok(&["close", "protocol"]);
+}
+
+#[test]
+fn saved_group_restores_routes_without_reusing_sessions_or_closing_unrelated_ones() {
+    let f = Fixture::new();
+    f.ok(&["devbox", "8080:3000", "5173", "--name", "web"]);
+    f.ok(&[
+        "internal",
+        "9000:8000",
+        "--jump",
+        "bastion",
+        "--name",
+        "api",
+    ]);
+    f.ok(&["other", "9999", "--name", "outside"]);
+    let old_ids: Vec<_> = f
+        .sessions()
+        .into_iter()
+        .map(|s| s["id"].as_str().unwrap().to_owned())
+        .collect();
+    f.ok(&["group", "save", "work", "web", "api"]);
+    let file = f.root.path().join("state/ford/groups/work.json");
+    let bytes = fs::read(&file).unwrap();
+    let group: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(group["sessions"].as_array().unwrap().len(), 2);
+    assert_eq!(group["sessions"][1]["jump"], "bastion");
+    assert!(group["sessions"][0].get("ssh_pid").is_none());
+    assert!(group["sessions"][0].get("target_checks").is_none());
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(file.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert!(
+        String::from_utf8_lossy(&f.ok(&["group", "show", "work"]).stdout)
+            .contains("bastion -> internal")
+    );
+    let skipped = f.ok(&["group", "open", "work"]);
+    assert!(String::from_utf8_lossy(&skipped.stdout).contains("already running 2"));
+    assert_eq!(f.sessions().len(), 3);
+    f.ok(&["group", "close", "work"]);
+    assert_eq!(f.session("outside")["state"], "running");
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    f.ok(&["group", "open", "work"]);
+    let restored: Vec<_> = f
+        .sessions()
+        .into_iter()
+        .filter(|s| s["state"] == "running" && s["name"] != "outside")
+        .collect();
+    assert_eq!(restored.len(), 2);
+    for session in &restored {
+        assert!(!old_ids.iter().any(|id| session["id"] == id.as_str()));
+        assert_eq!(session["target"], "unverified");
+    }
+    assert_eq!(
+        restored.iter().find(|s| s["name"] == "api").unwrap()["jump"],
+        "bastion"
+    );
+    f.ok(&["group", "remove", "work"]);
+    assert!(!file.exists());
+    assert_eq!(
+        f.sessions()
+            .iter()
+            .filter(|s| s["state"] == "running")
+            .count(),
+        3
+    );
+    assert_eq!(
+        serde_json::from_slice::<Vec<Value>>(&f.ok(&["group", "list", "--json"]).stdout)
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn saved_groups_can_be_replaced_and_created_from_running_or_completed_sessions() {
+    let f = Fixture::new();
+    f.ok(&["devbox", "8080", "--name", "web"]);
+    f.ok(&["devbox", "9000", "--name", "api"]);
+    f.ok(&["group", "save", "work", "web"]);
+    let file = f.root.path().join("state/ford/groups/work.json");
+    let before = fs::read(&file).unwrap();
+    assert!(!f.output(&["group", "save", "work", "api"]).status.success());
+    assert_eq!(fs::read(&file).unwrap(), before);
+    f.ok(&["group", "save", "work", "api", "--force"]);
+    f.ok(&["close", "web"]);
+    f.ok(&["group", "save", "history", "web"]);
+    f.ok(&["group", "save", "current", "--all"]);
+    let groups: Vec<Value> =
+        serde_json::from_slice(&f.ok(&["group", "list", "--json"]).stdout).unwrap();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| g["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["current", "history", "work"]
+    );
+    assert_eq!(groups[0]["sessions"][0]["name"], "api");
+    assert_eq!(groups[0]["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(f.session("api")["state"], "running");
+    assert!(
+        String::from_utf8_lossy(&f.ok(&["group", "show", "work"]).stdout).contains("9000:9000")
+    );
+}
+
+#[test]
+fn group_open_rejects_conflicts_before_starting_other_entries() {
+    let f = Fixture::new();
+    f.ok(&["devbox", "8080", "--name", "web"]);
+    f.ok(&["devbox", "9000", "--name", "api"]);
+    f.ok(&["group", "save", "work", "web", "api"]);
+    f.ok(&["group", "close", "work"]);
+    f.ok(&["different", "9001", "--name", "api"]);
+    let count = f.sessions().len();
+    let result = f.output(&["group", "open", "work"]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("conflicts with session"));
+    assert_eq!(f.sessions().len(), count);
+    f.ok(&["group", "close", "work"]);
+    assert_eq!(
+        f.sessions()
+            .iter()
+            .filter(|s| s["state"] == "running")
+            .count(),
+        1
+    );
+    f.ok(&["close", "api"]);
+    f.ok(&["other", "8080", "--name", "occupied"]);
+    assert!(!f.output(&["group", "open", "work"]).status.success());
+    assert_eq!(f.sessions().len(), count + 1);
+}
+
+#[test]
+fn concurrent_group_opens_do_not_duplicate_tunnels() {
+    let f = Fixture::new();
+    f.ok(&["devbox", "8080", "--name", "web"]);
+    f.ok(&["devbox", "9000"]);
+    f.ok(&["group", "save", "work", "--all"]);
+    f.ok(&["group", "close", "work"]);
+    let one = f
+        .command()
+        .args(["group", "open", "work"])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let two = f
+        .command()
+        .args(["group", "open", "work"])
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    for mut child in [one, two] {
+        assert!(child.wait().unwrap().success());
+    }
+    assert_eq!(f.sessions().len(), 4);
+    assert_eq!(
+        f.sessions()
+            .iter()
+            .filter(|s| s["state"] == "running")
+            .count(),
+        2
+    );
+    let one = f
+        .command()
+        .args(["group", "save", "new", "web"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let two = f
+        .command()
+        .args(["group", "save", "new", "web"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let successes = [one, two]
+        .into_iter()
+        .map(|mut child| child.wait().unwrap().success())
+        .filter(|success| *success)
+        .count();
+    assert_eq!(successes, 1);
+}
+
+#[test]
+fn invalid_and_unsafe_groups_do_not_start_sessions_or_overwrite_other_files() {
+    let f = Fixture::new();
+    assert_eq!(
+        f.output(&["group", "open", "../bad"]).status.code(),
+        Some(2)
+    );
+    assert!(!f.root.path().join("state/ford").exists());
+    f.ok(&["devbox", "8080", "--name", "web"]);
+    f.ok(&["other", "8080", "--name", "duplicate"]);
+    assert!(
+        !f.output(&["group", "save", "bad", "web", "duplicate"])
+            .status
+            .success()
+    );
+    assert!(
+        !f.output(&["group", "save", "bad", "web", "missing"])
+            .status
+            .success()
+    );
+    assert!(!f.root.path().join("state/ford/groups/bad.json").exists());
+    f.ok(&["group", "save", "safe", "web"]);
+    let file = f.root.path().join("state/ford/groups/safe.json");
+    let original = fs::read(&file).unwrap();
+    let mut group: Value = serde_json::from_slice(&original).unwrap();
+    group["sessions"][0]["host"] = "host;bad".into();
+    fs::write(&file, serde_json::to_vec(&group).unwrap()).unwrap();
+    assert!(!f.output(&["group", "open", "safe"]).status.success());
+    assert_eq!(f.sessions().len(), 2);
+    fs::write(&file, &original).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!f.output(&["group", "open", "safe"]).status.success());
+    fs::remove_file(&file).unwrap();
+    let victim = f.root.path().join("victim.json");
+    fs::write(&victim, "unchanged").unwrap();
+    symlink(&victim, &file).unwrap();
+    for command in [
+        vec!["group", "open", "safe"],
+        vec!["group", "remove", "safe"],
+        vec!["group", "save", "safe", "web", "--force"],
+    ] {
+        assert!(!f.output(&command).status.success());
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "unchanged");
+    }
+    let directory = file.parent().unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    let outside = f.root.path().join("outside-groups");
+    fs::DirBuilder::new().mode(0o700).create(&outside).unwrap();
+    symlink(&outside, directory).unwrap();
+    assert!(!f.output(&["group", "save", "safe", "web"]).status.success());
+    assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
 }

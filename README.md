@@ -167,6 +167,37 @@ ford devbox 3000 --foreground
 
 Press Ctrl+C to close it.
 
+## Save and reopen mapping groups
+
+Save selected sessions together so you can reopen their mappings with one command:
+
+```bash
+ford devbox 8080:3000 --name web
+ford internal 9000:8000 --jump bastion --name api
+ford group save work web api
+
+ford group close work
+ford group open work
+```
+
+A group keeps the hosts, port mappings, session names, and jump hosts. `group open` creates new background sessions
+and skips matching sessions that are already running. Other sessions are left alone. Known name or port conflicts
+must be resolved first; an unreachable session is never replaced automatically.
+
+```bash
+ford group save work --all --force   # Replace the group with all currently running sessions
+ford group list                     # List saved groups
+ford group show work                # Inspect saved routes and ports
+ford group remove work              # Delete the saved group; keep its running sessions
+```
+
+You can save completed sessions by name or ID, and use IDs for unnamed sessions. Groups survive session closure and
+ford upgrades. They are stored privately under `$XDG_STATE_HOME/ford/groups`, or `~/.local/state/ford/groups`.
+Reopening uses your current SSH configuration. Health results are checked again only when you run `ford check`.
+
+Sessions open independently: if a launch fails, successful launches stay running and the command reports the failure.
+Creation acknowledgment confirms SSH process startup; check the service separately for readiness.
+
 ## Check a web app
 
 Run an HTTP check through an existing tunnel to update its `TARGET` result:

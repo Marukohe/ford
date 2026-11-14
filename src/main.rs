@@ -7,6 +7,7 @@ mod check;
 mod cli;
 mod control;
 mod error;
+mod group;
 mod mapping;
 mod ssh;
 mod state;
@@ -56,6 +57,7 @@ fn execute() -> Result<i32> {
             let mut session = paths.reserve(open)?;
             supervisor::launch(&paths, &mut session, foreground)
         }
+        Action::Group { command } => group::run(command),
         Action::List { all, json } => {
             let paths = Paths::discover()?;
             let sessions = live_sessions(&paths, paths.sessions()?);
