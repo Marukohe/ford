@@ -60,7 +60,7 @@ cp "$asset" "$destination"
         let platform = if cfg!(target_os = "macos") {
             "apple-darwin"
         } else {
-            "unknown-linux-gnu"
+            "unknown-linux-musl"
         };
         let asset = root.path().join(format!(
             "assets/ford-v{version}-{}-{platform}.tar.gz",

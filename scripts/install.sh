@@ -6,12 +6,13 @@ fail() { printf 'ford installer: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-Usage: sh scripts/install.sh [--version VERSION] [--bin-dir DIRECTORY] [--no-modify-path]
+Usage: sh scripts/install.sh [--version VERSION] [--bin-dir DIRECTORY] [--libc auto|musl|gnu] [--no-modify-path]
                             [--resolve-version | --update]
 
 Install the latest stable ford release to ~/.local/bin by default.
   --version VERSION   Select a release, such as v0.1.0 or 0.1.0
   --bin-dir DIRECTORY Use an absolute installation directory
+  --libc LIBC         Linux runtime: auto prefers static musl, then GNU (default: auto)
   --no-modify-path    Leave shell startup files unchanged
   --resolve-version   Print the selected release tag without installing
   --update            Replace only the binary; leave all PATH configuration unchanged
@@ -19,17 +20,19 @@ EOF
 }
 
 version=latest
+libc=auto
 bin_dir=${HOME:?HOME must be set}/.local/bin
 modify_path=true
 resolve_only=false
 update_only=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --version|--bin-dir)
+        --version|--bin-dir|--libc)
             [ "$#" -ge 2 ] || fail "missing value for $1"
             case "$1" in
                 --version) version=$2 ;;
                 --bin-dir) bin_dir=$2 ;;
+                --libc) libc=$2 ;;
             esac
             shift 2 ;;
         --no-modify-path) modify_path=false; shift ;;
@@ -40,6 +43,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 [ "$resolve_only" != true ] || [ "$update_only" != true ] || fail '--resolve-version conflicts with --update'
+case "$libc" in auto|musl|gnu) ;; *) fail '--libc must be auto, musl, or gnu' ;; esac
 
 if [ "$version" != latest ]; then
     version=v${version#v}
@@ -61,6 +65,13 @@ case "$(uname -m)" in
     *) fail 'supported architectures are x86_64 and ARM64' ;;
 esac
 target=$architecture-$platform
+if [ "$platform" = unknown-linux-gnu ]; then
+    case "$libc" in
+        auto|musl) target=$architecture-unknown-linux-musl ;;
+    esac
+elif [ "$libc" != auto ]; then
+    fail '--libc applies only to Linux'
+fi
 for tool in curl awk mktemp; do
     command -v "$tool" >/dev/null 2>&1 || fail "required command not found: $tool"
 done
@@ -97,6 +108,12 @@ download --silent "$manifest_url" --output "$work_dir/SHA256SUMS" ||
     fail "cannot download release checksums; check that the requested release is published: $manifest_url"
 
 # Resolve the tag from the manifest, then pin the archive URL to that tag even if latest changes.
+if [ "$platform" = unknown-linux-gnu ] && [ "$libc" = auto ] &&
+    ! awk -v target="$target" 'NF == 2 && $2 ~ "^ford-v[0-9][0-9A-Za-z.+-]*-" target "\\.tar\\.gz$" { found=1 }
+        END { exit !found }' "$work_dir/SHA256SUMS"; then
+    target=$architecture-unknown-linux-gnu
+    printf 'No musl archive in this release; using GNU (requires compatible glibc).\n' >&2
+fi
 entry=$(awk -v target="$target" '
     NF == 2 && $2 ~ "^ford-v[0-9][0-9A-Za-z.+-]*-" target "\\.tar\\.gz$" {
         if (length($1) != 64 || $1 ~ /[^0-9a-f]/) exit 1

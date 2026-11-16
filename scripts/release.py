@@ -19,6 +19,8 @@ TARGETS = (
     "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
 )
 
 
@@ -55,12 +57,27 @@ def archive_name(tag, target):
     return f"ford-{tag}-{target}.tar.gz"
 
 
+def native_target(host, target):
+    return host == target or (target.endswith("-linux-musl") and host == target.removesuffix("musl") + "gnu")
+
+
+def verify_static(binary):
+    for option, forbidden in [("-lW", r"\bINTERP\b"), ("-dW", r"\(NEEDED\)")]:
+        output = subprocess.run(["readelf", option, str(binary)], check=True, capture_output=True,
+                                text=True, env=dict(os.environ, LC_ALL="C")).stdout
+        if re.search(forbidden, output):
+            raise ValueError("musl release must be statically linked, without an interpreter or shared libraries")
+
+
 def package(tag, version, target, output):
     name = archive_name(tag, target)
     host = subprocess.run(["rustc", "-vV"], cwd=ROOT, check=True, capture_output=True, text=True).stdout
-    if f"host: {target}\n" not in host:
+    host_target = next(line.removeprefix("host: ") for line in host.splitlines() if line.startswith("host: "))
+    if not native_target(host_target, target):
         raise ValueError("release packaging requires a native build; refusing to mislabel the current host")
     binary = ROOT / "target" / target / "release" / "ford"
+    if target.endswith("-linux-musl"):
+        verify_static(binary)
     actual = subprocess.run([str(binary), "--version"], check=True, capture_output=True, text=True).stdout.strip()
     if actual != f"ford {version}":
         raise ValueError(f"binary version mismatch: {actual!r}")

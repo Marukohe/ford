@@ -46,6 +46,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
           - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: macos-15
@@ -55,6 +59,21 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup show active-toolchain
+      - name: Install the build target
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: rustup target add "$BUILD_TARGET"
+      - name: Test the musl executable and SSH lifecycle
+        if: endsWith(matrix.target, '-linux-musl')
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          cargo test --locked --target "$BUILD_TARGET"
+          sudo apt-get update
+          sudo apt-get install --yes openssh-server curl lsof
+          sudo install -d -m 0755 /run/sshd
+          cargo build --release --locked --target "$BUILD_TARGET"
+          python3 scripts/test-ssh.py --binary "target/$BUILD_TARGET/release/ford"
       - name: Build and package the native executable
         env:
           RELEASE_TAG: ${{ github.ref_name }}

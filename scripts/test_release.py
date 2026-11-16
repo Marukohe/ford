@@ -5,10 +5,19 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from release import TARGETS, archive_name, changelog_notes, check_version, checksums
+from release import TARGETS, archive_name, changelog_notes, check_version, checksums, native_target
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_native_musl_builds_allow_only_the_matching_linux_architecture(self):
+        for architecture in ["x86_64", "aarch64"]:
+            gnu = f"{architecture}-unknown-linux-gnu"
+            musl = f"{architecture}-unknown-linux-musl"
+            self.assertTrue(native_target(gnu, musl))
+            self.assertTrue(native_target(musl, musl))
+            self.assertFalse(native_target("x86_64-apple-darwin", musl))
+        self.assertFalse(native_target("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-musl"))
+
     def test_tag_must_match_package_version(self):
         self.assertEqual(check_version("v0.1.0", "0.1.0"), {"version": "0.1.0", "prerelease": False})
         for tag in ["0.1.0", "v0.1.1", "v0.1.0/other", "v0.1.0\n"]:

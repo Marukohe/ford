@@ -84,8 +84,8 @@ shutil.copyfile(asset, args[args.index("--output") + 1])
 
     def test_platform_downloads_and_path_setup_are_repeatable(self):
         for system, machine, target, shell, profile in [
-            ("Linux", "x86_64", TARGETS[0], "bash", ".bashrc"),
-            ("Linux", "aarch64", TARGETS[1], "bash", ".bashrc"),
+            ("Linux", "x86_64", TARGETS[4], "bash", ".bashrc"),
+            ("Linux", "aarch64", TARGETS[5], "bash", ".bashrc"),
             ("Darwin", "x86_64", TARGETS[2], "zsh", ".zshrc"),
             ("Darwin", "arm64", TARGETS[3], "zsh", ".zshrc"),
         ]:
@@ -166,7 +166,7 @@ shutil.copyfile(asset, args[args.index("--output") + 1])
         return result
 
     def test_checksum_failure_keeps_previous_installation(self):
-        (self.assets / archive_name("v0.1.0", TARGETS[0])).write_bytes(b"tampered download")
+        (self.assets / archive_name("v0.1.0", TARGETS[4])).write_bytes(b"tampered download")
         result = self.assert_old_install_preserved()
         self.assertIn("SHA256 verification failed", result.stderr)
 
@@ -176,6 +176,29 @@ shutil.copyfile(asset, args[args.index("--output") + 1])
         result = self.install(success=False)
         self.assertIn("installation path is a directory", result.stderr)
         self.assertEqual(list(directory.iterdir()), [])
+
+    def test_explicit_gnu_and_automatic_fallback_for_older_releases(self):
+        self.install("--libc", "gnu")
+        self.assertTrue((self.root / "urls").read_text().splitlines()[-1].endswith(TARGETS[0] + ".tar.gz"))
+        manifest = self.assets / "SHA256SUMS"
+        manifest.write_text("".join(line for line in manifest.read_text().splitlines(True) if "linux-musl" not in line))
+        result = self.install()
+        self.assertIn("requires compatible glibc", result.stderr)
+        self.assertTrue((self.root / "urls").read_text().splitlines()[-1].endswith(TARGETS[0] + ".tar.gz"))
+        self.install("--libc", "musl", success=False)
+
+    def test_missing_or_invalid_musl_asset_never_falls_back_to_gnu(self):
+        for failure in ["missing", "checksum"]:
+            with self.subTest(failure=failure):
+                self.make_release()
+                asset = self.assets / archive_name("v0.1.0", TARGETS[4])
+                if failure == "missing":
+                    asset.unlink()
+                else:
+                    asset.write_bytes(b"tampered download")
+                self.assert_old_install_preserved()
+                urls = (self.root / "urls").read_text().splitlines()
+                self.assertFalse(any(url.endswith(TARGETS[0] + ".tar.gz") for url in urls))
 
     def test_failed_download_and_wrong_manifest_version(self):
         result = self.assert_old_install_preserved("--version", "v0.2.0")
@@ -201,6 +224,8 @@ shutil.copyfile(asset, args[args.index("--output") + 1])
             ("Linux", "x86_64", ["--version", "../bad"]),
             ("Linux", "x86_64", ["--bin-dir", "relative"]),
             ("Linux", "x86_64", ["--version"]),
+            ("Linux", "x86_64", ["--libc", "invalid"]),
+            ("Darwin", "arm64", ["--libc", "musl"]),
         ]:
             with self.subTest(system=system, machine=machine, args=args):
                 self.env.update(FORD_TEST_OS=system, FORD_TEST_ARCH=machine)
