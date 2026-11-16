@@ -44,6 +44,19 @@ publish() {
   printf '%s\n' "$@" > "$fixture_temp" && mv "$fixture_temp" "$fixture_file"
 }
 printf 'SSH fixture diagnostic\n' >&2
+if [ "$FORD_TEST_MODE" = legacy ]; then
+    ignore_fork=false
+    for argument in "$@"; do
+        case "$argument" in
+            IgnoreUnknown=ForkAfterAuthentication) ignore_fork=true ;;
+            ForkAfterAuthentication=*)
+                if [ "$ignore_fork" != true ]; then
+                    printf 'command-line: line 0: Bad configuration option: forkafterauthentication\n' >&2
+                    exit 255
+                fi ;;
+        esac
+    done
+fi
 publish "$FORD_TEST_ARGS" "$@"
 case "$FORD_TEST_MODE" in
   fail) exit 255 ;;
@@ -257,6 +270,43 @@ fn invalid_input_has_no_side_effects() {
     f.ok(&["close", "reserved-group"]);
     f.ok(&["open", "update", "3002", "--name", "reserved-update"]);
     f.ok(&["close", "reserved-update"]);
+}
+
+#[test]
+fn reverse_socks_starts_with_a_client_that_does_not_know_fork_after_authentication() {
+    let f = Fixture::new();
+    let output = f
+        .command()
+        .env("FORD_TEST_MODE", "legacy")
+        .args([
+            "server",
+            "--reverse-socks",
+            "1080",
+            "--retry",
+            "--name",
+            "legacy",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let session = f.wait_state("legacy", "running");
+    assert_eq!(session.get("retry_count"), None);
+    wait_for(|| f.root.path().join("args").exists());
+    let args = fs::read_to_string(f.root.path().join("args")).unwrap();
+    assert!(args.contains("IgnoreUnknown=ForkAfterAuthentication"));
+    assert!(args.contains("ForkAfterAuthentication=no"));
+    assert!(
+        !args
+            .lines()
+            .any(|argument| argument == "IgnoreUnknown=*" || argument == "-f")
+    );
+    f.ok(&["close", "legacy"]);
+    assert_eq!(f.session("legacy")["state"], "closed");
+    assert_eq!(f.session("legacy")["cleanup_complete"], true);
 }
 
 #[test]

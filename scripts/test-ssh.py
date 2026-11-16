@@ -145,12 +145,13 @@ def stop_process(process):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=Path("target/debug/ford"))
+    parser.add_argument("--ssh", type=Path, help="use a specific SSH client for compatibility checks")
     parser.add_argument("--bench", action="store_true", help="measure 1, 10, and 50 real SSH sessions on Linux")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
     assert binary.is_file(), f"build ford first: {binary}"
-    ssh = shutil.which("ssh")
+    ssh = str(args.ssh.resolve()) if args.ssh else shutil.which("ssh")
     sshd = shutil.which("sshd") or "/usr/sbin/sshd"
     assert ssh and Path(sshd).is_file(), "OpenSSH client, ssh-keygen, and sshd are required"
     assert shutil.which("curl") and shutil.which("lsof"), "curl and lsof are required for target checks"
@@ -201,10 +202,14 @@ LogLevel VERBOSE
         wrong_key = " ".join((root / "wrong.pub").read_text().split()[:2])
         (root / "wrong_hosts").write_text(f"[127.0.0.1]:{ports[0]} {wrong_key}\n")
         config = root / "ssh.conf"
-        config.write_text(f"""Host denied
+        # ProxyJump helper clients also read the test alias that requests modern backgrounding.
+        config.write_text(f"""IgnoreUnknown ForkAfterAuthentication
+Host denied
     Port {ports[1]}
 Host noauth
     IdentityFile {root / 'wrong'}
+Host configured-fork
+    ForkAfterAuthentication yes
 Host badkey
     UserKnownHostsFile {root / 'wrong_hosts'}
 Host 127.0.0.1
@@ -215,7 +220,7 @@ Host internal
     ProxyCommand false
 Host jumped
     ProxyJump good
-Host good denied badkey jumped internal 127.0.0.1
+Host good denied badkey jumped internal configured-fork 127.0.0.1
     IdentityFile {root / 'client'}
 Host *
     HostName 127.0.0.1
@@ -257,6 +262,14 @@ Host *
                 wait_for(lambda: socket.create_connection(("127.0.0.1", port), timeout=0.2).close() is None,
                          "isolated sshd startup")
             target = server.server_port
+            local = free_port()
+            ford("configured-fork", f"{local}:{target}", "--name", "no-fork")
+            wait_for(lambda: fetch(local) == PAYLOAD, "configured SSH backgrounding overridden")
+            owned = state("no-fork")
+            assert owned["state"] == "running" and owned["ssh_pid"]
+            ford("close", "no-fork")
+            wait_for(lambda: released(local), "configured backgrounding port release")
+            check("SSH stays owned in the foreground when configuration requests backgrounding")
             local, second = free_port(), free_port()
             ford("good", f"{local}:{target}", f"{second}:{target}", "--name", "web")
             wait_for(lambda: fetch(local) == PAYLOAD and fetch(second) == PAYLOAD, "real multi-port HTTP forwarding")

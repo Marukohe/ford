@@ -159,6 +159,7 @@ The intended arguments for `ford devbox 8080:300` are equivalent to:
 
 ```bash
 ssh -N -T \
+  -o IgnoreUnknown=ForkAfterAuthentication \
   -o BatchMode=yes \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=15 \
@@ -190,6 +191,11 @@ ford explicitly overrides the options shown above to fix keepalive and compressi
 over the lifecycle, and disable agent/X11 forwarding and `LocalCommand`/`RemoteCommand`. SSH itself remains in the
 foreground of the supervisor's execution model; the Rust supervisor handles background operation. Neither mode uses `ssh
 -f`.
+
+`ForkAfterAuthentication` was added in OpenSSH 8.7. Put the narrowly scoped
+`IgnoreUnknown=ForkAfterAuthentication` first so older clients can start. They cannot fork through that unknown
+configuration option; ford never supplies `-f`. Newer clients still honor the explicit `no` override. Do not ignore
+unknown options generally or suppress authentication, host key, or forwarding failures.
 
 The first release uses `BatchMode=yes` in both modes, with SSH stdin redirected to the null device. It supports
 configured keys and agent authentication without waiting for passwords, passphrases, or host key confirmation in the
@@ -538,6 +544,8 @@ levels:
 
 Default tests must not require personal host aliases or public network access. Report Linux and macOS validation
 separately. Static inspection or a test on one platform does not establish cross-platform success.
+Use `scripts/test-ssh.py --ssh /path/to/ssh` for compatibility checks with a specific client. The isolated suite also
+requests SSH backgrounding in one alias and verifies ford keeps the child supervised and releases the port on close.
 
 ## 10. Performance Validation
 

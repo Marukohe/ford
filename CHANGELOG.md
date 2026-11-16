@@ -4,6 +4,11 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+## [0.4.2]
+
+### Fixed
+
+- Start tunnels with OpenSSH clients older than 8.7 while still disabling configured SSH backgrounding on newer clients.
 ## [0.4.1]
 
 ### Added

@@ -27,7 +27,7 @@ Only SSH needs to be reachable. Keep your app's port private; no ford installati
 
 ## Install
 
-Linux and macOS, x86_64 and ARM64. Requires OpenSSH and an SSH server that allows TCP forwarding.
+Linux and macOS, x86_64 and ARM64. Requires OpenSSH 7.6 or newer and an SSH server that allows TCP forwarding.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Marukohe/ford/main/scripts/install.sh | sh
@@ -96,7 +96,8 @@ curl --proxy socks5h://127.0.0.1:1080 https://example.com
 Manage the session on the machine where you launched ford. Both modes support jump hosts, groups, and retries;
 repeat the options for more ports or combine them with fixed mappings.
 
-Reverse SOCKS requires dynamic remote forwarding support and remote TCP forwarding permission. The SSH server must use
+Reverse SOCKS requires OpenSSH 7.6 or newer on the machine running ford, and remote TCP forwarding permission.
+The SSH server must use
 `GatewayPorts no` or `clientspecified`; `yes` overrides loopback binding. ford cannot verify that remote policy.
 See [OpenSSH's GatewayPorts documentation](https://man.openbsd.org/sshd_config#GatewayPorts).
 

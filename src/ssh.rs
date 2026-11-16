@@ -20,6 +20,9 @@ use std::{
 pub fn arguments(session: &Session) -> Vec<String> {
     let mut args = vec!["-N".into(), "-T".into()];
     for option in [
+        // Older clients cannot fork through this configuration option because it does not exist.
+        // Newer clients must still override a user's ForkAfterAuthentication=yes.
+        "IgnoreUnknown=ForkAfterAuthentication",
         "BatchMode=yes",
         "ExitOnForwardFailure=yes",
         "ServerAliveInterval=15",
