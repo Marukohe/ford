@@ -4,7 +4,7 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
-## [0.4.0]
+## [0.4.1]
 
 ### Added
 
@@ -19,6 +19,7 @@ Notable changes in each version of ford.
 ### Fixed
 
 - Prefer musl automatically in the Linux installer and self-updater, avoiding newer glibc requirements on older systems.
+- Keep atomically replaced state snapshots readable during concurrent list requests without relaxing write protections.
 
 ### Upgrade Notes
 

@@ -203,12 +203,12 @@ pub fn private_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn check_file(file: &File, path: &Path) -> Result<()> {
+fn check_file(file: &File, path: &Path, allow_unlinked: bool) -> Result<()> {
     let meta = file.metadata()?;
     if !meta.is_file()
         || meta.uid() != geteuid().as_raw()
         || meta.mode() & 0o077 != 0
-        || meta.nlink() != 1
+        || (meta.nlink() != 1 && !(allow_unlinked && meta.nlink() == 0))
     {
         return Err(Error::new(format!(
             "refusing unsafe file: {}",
@@ -227,7 +227,9 @@ pub fn open_private(path: &Path, create: bool, write: bool) -> Result<File> {
         .mode(0o600)
         .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
         .open(path)?;
-    check_file(&file, path)?;
+    // Atomic replacement can unlink an already-open snapshot. Its read-only handle remains valid;
+    // writers and lock holders must still refer to a linked inode. Never accept multiple hard links.
+    check_file(&file, path, !create && !write)?;
     Ok(file)
 }
 
@@ -443,4 +445,32 @@ pub fn read_logs(paths: &Paths, id: &str, count: usize) -> Result<String> {
 pub fn socket_permissions(path: &Path) -> Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replaced_snapshots_remain_readable_without_relaxing_write_or_hardlink_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("snapshot.json");
+        let mut file = open_private(&path, true, true).unwrap();
+        file.write_all(b"snapshot").unwrap();
+        let snapshot = open_private(&path, false, false).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert!(check_file(&snapshot, &path, true).is_ok());
+        assert!(check_file(&snapshot, &path, false).is_err());
+        let mut contents = String::new();
+        (&snapshot).read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "snapshot");
+        snapshot
+            .set_permissions(fs::Permissions::from_mode(0o644))
+            .unwrap();
+        assert!(check_file(&snapshot, &path, true).is_err());
+
+        drop(open_private(&path, true, true).unwrap());
+        fs::hard_link(&path, directory.path().join("alias.json")).unwrap();
+        assert!(open_private(&path, false, false).is_err());
+    }
 }

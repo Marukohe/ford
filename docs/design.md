@@ -428,6 +428,10 @@ through a temporary file in the same directory followed by atomic rename, so rea
 short-lived file locks for name reservations and shared index changes; never wait for network operations or SSH
 authentication while holding those locks.
 
+An already-open read-only snapshot remains valid if atomic replacement unlinks its inode before metadata validation.
+Allow zero links for these handles while retaining ownership, private permissions, regular-file, and no-symlink checks.
+Reject multiple hard links; writers and lock handles still require exactly one link.
+
 The supervisor holds the session lock and writes its live and terminal state. The CLI must not infer live state from
 modification times or PID liveness tests. Old unresponsive records can be identified as stale, but cannot be deleted and
 have their names released without evidence. Recovery and cleanup of abnormal sessions require a later design.
