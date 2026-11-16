@@ -4,6 +4,8 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+## [0.4.0]
+
 ### Added
 
 - Update to the latest stable release in place with `ford update`, or check availability with `ford update --check`.
@@ -12,6 +14,18 @@ Notable changes in each version of ford.
 - Expose a SOCKS proxy on an SSH host with `--reverse-socks PORT`, using the machine running ford as the exit.
 - Save and restore SOCKS ports and directions in groups, with separate local and remote port conflict checks.
 - Manage proxy sessions with the existing list, close, logs, jump hosts, and bounded reconnection options.
+- Publish static musl binaries for Linux x86_64 and ARM64 alongside the GNU and macOS archives.
+
+### Fixed
+
+- Prefer musl automatically in the Linux installer and self-updater, avoiding newer glibc requirements on older systems.
+
+### Upgrade Notes
+
+- Rerun the install command to upgrade from older releases that do not have `ford update`.
+- The installer falls back to GNU only when an older release has no musl archive. Use `--libc musl` to require musl,
+  or `--libc gnu` to select GNU explicitly.
+- System OpenSSH is still required. Static linking applies to ford itself.
 
 ## [0.3.0]
 

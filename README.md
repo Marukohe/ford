@@ -35,6 +35,8 @@ curl -fsSL https://raw.githubusercontent.com/Marukohe/ford/main/scripts/install.
 
 Installs the latest release to `~/.local/bin`, verifies its checksum, and configures PATH for Bash or zsh.
 Open a new terminal or run the activation command printed by the installer. Run the same command to upgrade.
+On Linux it automatically selects a static musl binary, avoiding a dependency on your system's glibc version.
+GNU binaries remain available for manual download or with `sh scripts/install.sh --libc gnu`.
 
 [Manual downloads](https://github.com/Marukohe/ford/releases) are also available. To build the current source with Rust:
 
@@ -57,8 +59,6 @@ ford update           # Download, verify, and replace the current executable
 Updates preserve your installation directory, PATH settings, and running sessions. The directory must be writable;
 ford does not request administrator access. Requires `curl`, `tar`, and `sha256sum` or `shasum`.
 Download and verification failures leave the existing binary in place. Current or newer versions are not reinstalled.
-
-`ford update` and SOCKS options currently require a source build; they will ship in the next release.
 
 ## Forward ports
 

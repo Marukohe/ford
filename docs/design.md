@@ -1,7 +1,6 @@
 # ford Design
 
-Status: implemented through v0.3, including saved groups and bounded reconnection. SOCKS forwarding and application
-updates are implemented for the next release.
+Status: implemented through v0.4, including SOCKS forwarding, application updates, and static Linux release binaries.
 Updated: 2026-11-16. The architecture uses spawn with a Rust supervisor. Historical platform checks are recorded in
 [validation.md](validation.md); they do not establish validation of later changes.
 
@@ -496,8 +495,8 @@ anonymous mappings; different groups can launch independently and ordinary SSH b
 - **Stage: v0.3**
   - Scope: Saved mapping groups and bounded `--retry`
   - Requirements: Preserve ownership, cancel retries promptly, and invalidate checks across attempts
-- **Stage: Next release**
-  - Scope: Local and reverse SOCKS forwarding through OpenSSH
+- **Stage: v0.4**
+  - Scope: Local and reverse SOCKS forwarding, application updates, and static musl releases
   - Requirements: Distinguish listener sides and egress, keep checks truthful, and document remote bind policy
 - **Stage: Future options**
   - Scope: Optional `--open`, remote target address, local bind options, and periodic checks
@@ -588,6 +587,21 @@ running supervisors and SSH children continue using their existing processes. Ne
 Report unwritable installation directories explicitly. Checksum, download, extraction, and binary validation failures
 occur before replacement and preserve the installed file. If the installer exits unsuccessfully, retain its diagnostics
 and direct the user to confirm the installed version rather than claiming a replacement could not have happened.
+
+## 13. Linux Release Compatibility
+
+Publish GNU and musl archives for both Linux architectures. Build musl with the pinned Rust toolchain's bundled linker
+and an explicit static C runtime. Packaging permits a musl target on a GNU host only for the same architecture.
+Before archiving, inspect the ELF program and dynamic headers with `readelf`; reject an interpreter or shared-library
+dependency. Execute the binary's version/help checks and run native musl lifecycle and isolated SSH tests in release CI.
+
+The installer and embedded self-updater prefer musl on Linux whenever its archive appears in the checksum manifest.
+Fall back to GNU only if that release has no matching musl entry, with an explicit glibc compatibility notice.
+Malformed checksums, failed musl downloads, and validation errors must never silently select GNU. `--libc musl` and
+`--libc gnu` require a specific variant; reject these overrides on macOS. macOS selection is unchanged.
+
+Static musl releases avoid dependence on the host glibc. Linux kernel compatibility and the system OpenSSH client
+remain runtime requirements. Do not claim arbitrary old Linux versions are supported merely because linking is static.
 
 ## References
 
