@@ -23,6 +23,7 @@ Only SSH needs to be reachable. Keep your app's port private; no ford installati
 - **Saved groups:** save a set of mappings and restore them with one command.
 - **Bounded reconnection:** opt into retries with increasing delays; cancel them with `close` or Ctrl+C.
 - **Fits your SSH setup:** reuse aliases, keys, agents, and known hosts. One Rust executable, using system OpenSSH.
+- **Self-updates:** install the latest stable release with `ford update`, with checksum verification.
 
 ## Install
 
@@ -46,6 +47,19 @@ cargo install --path . --locked
 First confirm that `ssh user@server` works with a key or agent and a trusted host key.
 ford does not prompt for passwords.
 
+## Update
+
+```bash
+ford update --check   # Check for a newer stable release
+ford update           # Download, verify, and replace the current executable
+```
+
+Updates preserve your installation directory, PATH settings, and running sessions. The directory must be writable;
+ford does not request administrator access. Requires `curl`, `tar`, and `sha256sum` or `shasum`.
+Download and verification failures leave the existing binary in place. Current or newer versions are not reinstalled.
+
+`ford update` and SOCKS options currently require a source build; they will ship in the next release.
+
 ## Forward ports
 
 Use `LOCAL:REMOTE`, or a single number for the same port on both machines:
@@ -61,8 +75,6 @@ Fixed mappings connect to `127.0.0.1` on the remote machine. Local listeners bin
 Use SSH configuration for login ports and identities; jump hosts also accept `user@host:port`.
 
 ## Proxy outbound requests
-
-SOCKS options currently require a source build; they will ship in the next release.
 
 Choose the direction that matches your SSH access:
 

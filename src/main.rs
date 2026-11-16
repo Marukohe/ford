@@ -12,6 +12,7 @@ mod mapping;
 mod ssh;
 mod state;
 mod supervisor;
+mod update;
 
 use cli::Action;
 use control::Operation;
@@ -50,6 +51,7 @@ fn execute() -> Result<i32> {
     }
     let cli = cli::parse();
     match cli.command {
+        Action::Update { check } => update::run(check),
         Action::Open(open) => {
             open.validate()?;
             let paths = Paths::discover()?;

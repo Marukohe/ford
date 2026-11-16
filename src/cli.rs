@@ -19,6 +19,12 @@ pub struct Cli {
 pub enum Action {
     /// Open a session (also: ford HOST [PORT...])
     Open(Open),
+    /// Install the latest stable release in place
+    Update {
+        /// Check for a newer release without installing it
+        #[arg(long)]
+        check: bool,
+    },
     /// Query live session state
     List {
         /// Include completed sessions
@@ -144,7 +150,10 @@ pub fn parse() -> Cli {
     let mut args: Vec<OsString> = std::env::args_os().collect();
     if let Some(first) = args.get(1).and_then(|s| s.to_str())
         && !first.starts_with('-')
-        && !["open", "list", "close", "check", "group", "logs", "help"].contains(&first)
+        && ![
+            "open", "update", "list", "close", "check", "group", "logs", "help",
+        ]
+        .contains(&first)
     {
         args.insert(1, OsString::from("open"));
     }

@@ -255,6 +255,8 @@ fn invalid_input_has_no_side_effects() {
     f.ok(&["close", "reserved"]);
     f.ok(&["open", "group", "3001", "--name", "reserved-group"]);
     f.ok(&["close", "reserved-group"]);
+    f.ok(&["open", "update", "3002", "--name", "reserved-update"]);
+    f.ok(&["close", "reserved-update"]);
 }
 
 #[test]

@@ -7,17 +7,22 @@ fail() { printf 'ford installer: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'EOF'
 Usage: sh scripts/install.sh [--version VERSION] [--bin-dir DIRECTORY] [--no-modify-path]
+                            [--resolve-version | --update]
 
 Install the latest stable ford release to ~/.local/bin by default.
   --version VERSION   Select a release, such as v0.1.0 or 0.1.0
   --bin-dir DIRECTORY Use an absolute installation directory
   --no-modify-path    Leave shell startup files unchanged
+  --resolve-version   Print the selected release tag without installing
+  --update            Replace only the binary; leave all PATH configuration unchanged
 EOF
 }
 
 version=latest
 bin_dir=${HOME:?HOME must be set}/.local/bin
 modify_path=true
+resolve_only=false
+update_only=false
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --version|--bin-dir)
@@ -28,10 +33,13 @@ while [ "$#" -gt 0 ]; do
             esac
             shift 2 ;;
         --no-modify-path) modify_path=false; shift ;;
+        --resolve-version) resolve_only=true; shift ;;
+        --update) update_only=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
 done
+[ "$resolve_only" != true ] || [ "$update_only" != true ] || fail '--resolve-version conflicts with --update'
 
 if [ "$version" != latest ]; then
     version=v${version#v}
@@ -53,10 +61,12 @@ case "$(uname -m)" in
     *) fail 'supported architectures are x86_64 and ARM64' ;;
 esac
 target=$architecture-$platform
-for tool in curl tar awk sed mktemp; do
+for tool in curl awk mktemp; do
     command -v "$tool" >/dev/null 2>&1 || fail "required command not found: $tool"
 done
-if command -v sha256sum >/dev/null 2>&1; then
+if [ "$resolve_only" = true ]; then
+    checksum_tool=
+elif command -v sha256sum >/dev/null 2>&1; then
     checksum_tool=sha256sum
 elif command -v shasum >/dev/null 2>&1; then
     checksum_tool=shasum
@@ -82,7 +92,7 @@ download() {
     curl --fail --show-error --location --retry 3 --connect-timeout 15 --max-time 300 \
         --proto '=https' --proto-redir '=https' "$@"
 }
-printf 'Finding ford %s for %s...\n' "$version" "$target"
+printf 'Finding ford %s for %s...\n' "$version" "$target" >&2
 download --silent "$manifest_url" --output "$work_dir/SHA256SUMS" ||
     fail "cannot download release checksums; check that the requested release is published: $manifest_url"
 
@@ -102,6 +112,13 @@ if [ "$version" != latest ] && [ "$version" != "$resolved_version" ]; then
     fail 'release checksums do not match the requested version'
 fi
 version=$resolved_version
+if [ "$resolve_only" = true ]; then
+    printf '%s\n' "$version"
+    exit 0
+fi
+for tool in tar sed; do
+    command -v "$tool" >/dev/null 2>&1 || fail "required command not found: $tool"
+done
 printf 'Downloading ford %s...\n' "$version"
 download --progress-bar "$repository/releases/download/$version/$asset" --output "$work_dir/archive.tar.gz" ||
     fail "cannot download $asset"
@@ -125,6 +142,11 @@ cp "$work_dir/ford" "$staged_file"
 chmod 755 "$staged_file"
 mv -f "$staged_file" "$bin_dir/ford"
 staged_file=
+
+if [ "$update_only" = true ]; then
+    printf 'Updated ford %s at %s/ford\n' "$version" "$bin_dir"
+    exit 0
+fi
 
 # Single-quote the literal directory so shell metacharacters in paths are never evaluated.
 quoted_bin=$(printf '%s' "$bin_dir" | sed "s/'/'\\\\''/g")

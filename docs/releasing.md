@@ -35,6 +35,11 @@ active login profile; zsh configures `.zshrc` under `$ZDOTDIR` or `$HOME`. `--no
 alone. The installer prints a source command for the current terminal, since a child process cannot change its
 parent's environment. Users can run that command or open a new terminal after installing.
 
+The CLI embeds this installer for `ford update`. `--resolve-version` fetches only the selected release tag;
+`--update` installs a verified binary without writing PATH loaders or shell startup files. The CLI compares versions
+before installing and pins the resolved tag, so a changing latest release cannot mix versions. Updater tests use
+isolated downloads and installation directories and run with `cargo test` on all four native CI platforms.
+
 Publish `scripts/install.sh` on `main` before advertising the raw GitHub installer URL. Publish a release
 before downloads can succeed. Keep archive names and `SHA256SUMS` compatible with the installer when changing assets.
 CI tests the installer on all four native runners using isolated homes, controlled downloads, and real checksum tools:

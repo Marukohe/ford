@@ -1,8 +1,8 @@
 # ford Design
 
-Status: implemented through v0.3, including saved groups and bounded reconnection. SOCKS forwarding is implemented
-for the next release.
-Updated: 2026-11-14. The architecture uses spawn with a Rust supervisor. Historical platform checks are recorded in
+Status: implemented through v0.3, including saved groups and bounded reconnection. SOCKS forwarding and application
+updates are implemented for the next release.
+Updated: 2026-11-16. The architecture uses spawn with a Rust supervisor. Historical platform checks are recorded in
 [validation.md](validation.md); they do not establish validation of later changes.
 
 ## 1. Goals and Prerequisites
@@ -107,12 +107,14 @@ ford list --json
 
 ford --help
 ford --version
+ford update
+ford update --check
 ```
 
 Creation syntax: `ford <HOST> [PORT|LOCAL:REMOTE...] [--socks PORT] [--reverse-socks PORT] [--jump HOST]`
 `[--name NAME] [--retry[=N]] [--foreground]`. At least one fixed mapping or SOCKS listener is required.
-The explicit form is `ford open <HOST> ...`. The names `open`, `list`, `close`, `check`, `group`, and `logs` are
-reserved.
+The explicit form is `ford open <HOST> ...`. Reserved names are `open`, `update`, `list`, `close`, `check`, `group`,
+and `logs`.
 For an SSH alias with a reserved name, use the explicit form, such as `ford open list 3000`.
 
 - `HOST` accepts SSH configuration aliases, hostnames, IPv4 addresses, and `user@host`. Use an SSH configuration alias
@@ -562,6 +564,30 @@ available, noninteractive authentication in both modes, Linux/macOS support only
 addresses for fixed mappings initially fixed to `127.0.0.1`. SOCKS destinations are selected by each client request;
 listeners request loopback, subject to the documented remote sshd policy. The running state means only that the SSH
 process is alive; an on-demand check records HTTP reachability separately.
+
+## 12. Application Updates
+
+`ford update` installs the latest stable GitHub release in place. `ford update --check` reports availability without
+replacing the executable or requiring a writable installation directory. Both return 0 on a successful check;
+absence of a newer version is a successful no-op. Compare version components numerically, ignore build metadata,
+allow a prerelease to advance to the same stable version, and never downgrade a newer build.
+
+Embed `scripts/install.sh` in the executable. Run that bundled script through `Command` argument arrays with `sh`;
+never download and execute a script, interpolate shell commands, or use `sh -c`. Reuse the installer's HTTPS-only
+download policy, platform selection, checksum manifest, SHA256 checks, executable version check, and atomic rename.
+The resolver mode downloads only the manifest; the install step pins its tag and validates the matching manifest
+again. No new Rust dependency is needed: standard-library processes and files orchestrate the existing system tools.
+
+Resolve symlinks to the actual executable and require the installed filename `ford`. Stage a private temporary
+directory beside that executable for updates, or in the system temporary directory for check-only mode. Hold a retained
+private `.ford-update.lock` file lock in the installation directory through version lookup and replacement. Concurrent
+update attempts wait at most two seconds for the lock. Temporary files are removed on normal success and error paths.
+
+The installer update mode changes only the binary. Do not modify PATH, shell startup files, session state, or groups;
+running supervisors and SSH children continue using their existing processes. Never elevate privileges automatically.
+Report unwritable installation directories explicitly. Checksum, download, extraction, and binary validation failures
+occur before replacement and preserve the installed file. If the installer exits unsuccessfully, retain its diagnostics
+and direct the user to confirm the installed version rather than claiming a replacement could not have happened.
 
 ## References
 

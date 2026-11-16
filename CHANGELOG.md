@@ -6,6 +6,8 @@ Notable changes in each version of ford.
 
 ### Added
 
+- Update to the latest stable release in place with `ford update`, or check availability with `ford update --check`.
+- Verify update checksums and binary versions before replacement, preserving custom paths and shell configuration.
 - Proxy selected outbound requests through an SSH host with `--socks PORT`.
 - Expose a SOCKS proxy on an SSH host with `--reverse-socks PORT`, using the machine running ford as the exit.
 - Save and restore SOCKS ports and directions in groups, with separate local and remote port conflict checks.
