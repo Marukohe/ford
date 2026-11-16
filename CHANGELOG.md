@@ -4,6 +4,10 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject an unmapped HTTP check port before contacting the supervisor, keeping invalid-input errors consistent.
+
 ## [0.4.2]
 
 ### Fixed

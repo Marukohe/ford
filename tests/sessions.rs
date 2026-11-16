@@ -1102,6 +1102,16 @@ fn socks_arguments_and_groups_preserve_direction_and_lifecycle() {
             .contains("already running 1")
     );
     f.ok(&["group", "close", "proxies"]);
+    let invalid = f.output(&[
+        "check",
+        original["id"].as_str().unwrap(),
+        "--port",
+        "1080",
+        "--http",
+        "/",
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("no mapping for local port 1080"));
 }
 
 #[test]

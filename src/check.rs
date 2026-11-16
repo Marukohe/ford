@@ -81,6 +81,14 @@ pub fn run(paths: &Paths, stored: &Session, args: &Check) -> Result<i32> {
             "ford check requires a fixed local port mapping; test SOCKS with curl --proxy socks5h://HOST:PORT URL",
         ));
     }
+    if let Some(port) = args.port
+        && !stored.mappings.iter().any(|mapping| mapping.local == port)
+    {
+        return Err(Error::with_code(
+            2,
+            format!("no mapping for local port {port}"),
+        ));
+    }
     if !args.http.starts_with('/')
         || args.http.len() > 2048
         || !args.http.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
