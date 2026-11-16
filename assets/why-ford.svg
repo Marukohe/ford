@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="548" viewBox="0 0 1000 548"
+  role="img" aria-labelledby="title description">
+  <title id="title">Why ford? Short commands for everyday SSH tunnels.</title>
+  <desc id="description">Four comparisons: multiple port forwards, a jump host, local SOCKS, and reverse SOCKS.
+    SSH examples include explicit forwarding, noninteractive authentication, and keepalive settings.
+    ford supplies those settings automatically and manages the session.</desc>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; }
+    .heading { font-size: 22px; font-weight: 700; }
+    .caption { font-size: 12px; fill: #64748b; }
+    .case { font-size: 12px; font-weight: 600; fill: #475569; }
+    .code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 13px; }
+  </style>
+  <rect width="1000" height="548" rx="16" fill="#ffffff"/>
+  <text x="36" y="30" class="heading" fill="#334155">SSH</text>
+  <text x="36" y="49" class="caption">Explicit forwarding and connection settings</text>
+  <text x="656" y="30" class="heading" fill="#1d4ed8">ford</text>
+  <text x="656" y="49" class="caption">Defaults included. Sessions managed.</text>
+  <text x="20" y="74" class="case">Forward multiple ports</text>
+  <rect x="20" y="86" width="580" height="86" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="638" y="86" width="342" height="86" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <path d="M609 129 H628 M622 124 L628 129 L622 134"
+    fill="none" stroke="#64748b" stroke-width="1.5"/>
+  <text x="36" y="109" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \</tspan></text>
+  <text x="36" y="125" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \</tspan></text>
+  <text x="36" y="141" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -L 127.0.0.1:8080:127.0.0.1:3000 \</tspan></text>
+  <text x="36" y="157" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -L 127.0.0.1:9000:127.0.0.1:8000 devbox</tspan></text>
+  <text x="656" y="134" class="code" fill="#1d4ed8">ford devbox 8080:3000 9000:8000</text>
+  <text x="20" y="192" class="case">Reach an internal machine through a jump host</text>
+  <rect x="20" y="204" width="580" height="86" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="638" y="204" width="342" height="86" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <path d="M609 247 H628 M622 242 L628 247 L622 252"
+    fill="none" stroke="#64748b" stroke-width="1.5"/>
+  <text x="36" y="235" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \</tspan></text>
+  <text x="36" y="251" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \</tspan></text>
+  <text x="36" y="267" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -J bastion -L 127.0.0.1:8080:127.0.0.1:3000 internal</tspan></text>
+  <text x="656" y="252" class="code" fill="#1d4ed8">ford internal 8080:3000 --jump bastion</text>
+  <text x="20" y="310" class="case">Local SOCKS: run on server, exit through server1</text>
+  <rect x="20" y="322" width="580" height="86" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="638" y="322" width="342" height="86" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <path d="M609 365 H628 M622 360 L628 365 L622 370"
+    fill="none" stroke="#64748b" stroke-width="1.5"/>
+  <text x="36" y="353" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \</tspan></text>
+  <text x="36" y="369" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \</tspan></text>
+  <text x="36" y="385" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -D 127.0.0.1:1080 server1</tspan></text>
+  <text x="656" y="370" class="code" fill="#1d4ed8">ford server1 --socks 1080</text>
+  <text x="20" y="428" class="case">Reverse SOCKS: run on server1, expose a proxy on server</text>
+  <rect x="20" y="440" width="580" height="86" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="638" y="440" width="342" height="86" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <path d="M609 483 H628 M622 478 L628 483 L622 488"
+    fill="none" stroke="#64748b" stroke-width="1.5"/>
+  <text x="36" y="471" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes \</tspan></text>
+  <text x="36" y="487" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \</tspan></text>
+  <text x="36" y="503" class="code" fill="#334155" xml:space="preserve">
+    <tspan x="36">  -R 127.0.0.1:1080 server</tspan></text>
+  <text x="656" y="488" class="code" fill="#1d4ed8">ford server --reverse-socks 1080</text>
+</svg>

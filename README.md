@@ -1,16 +1,13 @@
 # ford
 
-SSH tunnels and SOCKS proxies, with names, saved groups, and automatic reconnection.
+## Why ford?
 
-Bring a private remote service to localhost:
+One CLI for remote ports, jump hosts, and outbound proxies. Short commands, with session management built in.
 
-```bash
-ford user@server 8080:3000 --name web --retry
-# Open http://127.0.0.1:8080
+![SSH commands for four use cases compared with their shorter ford equivalents](assets/why-ford.svg)
 
-ford list
-ford close web
-```
+The SSH examples spell out forwarding, noninteractive authentication, and keepalive settings that ford supplies
+by default. ford also gives you named background sessions, logs, bounded retries, and saved groups.
 
 Only SSH needs to be reachable. Keep your app's port private; no ford installation is needed on the SSH server.
 
