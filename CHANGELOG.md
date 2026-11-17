@@ -4,8 +4,12 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+## [0.4.3]
+
 ### Fixed
 
+- Omit `ForkAfterAuthentication` completely for SSH clients that do not advertise support, including during retries.
+- Keep one resolved SSH executable path across reconnects and log the supervisor version and arguments for each attempt.
 - Reject an unmapped HTTP check port before contacting the supervisor, keeping invalid-input errors consistent.
 
 ## [0.4.2]

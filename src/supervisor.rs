@@ -21,6 +21,7 @@ use std::{
             process::ExitStatusExt,
         },
     },
+    path::Path,
     process::{Command, Stdio},
     sync::{
         Arc,
@@ -226,7 +227,8 @@ fn supervise(
         let listener = UnixListener::bind(&socket_path)?;
         state::socket_permissions(&socket_path)?;
         listener.set_nonblocking(true)?;
-        let mut ssh = Some(OwnedSsh::spawn(session)?);
+        let program = ssh::executable()?;
+        let mut ssh = Some(OwnedSsh::spawn(paths, session, &program)?);
         session.ssh_pid = ssh.as_ref().map(OwnedSsh::pid);
         let mut logs = None;
         let result = (|| {
@@ -244,6 +246,7 @@ fn supervise(
                 &signal,
                 foreground,
                 &mut startup_stream,
+                &program,
             )
         })();
         if result.is_err() {
@@ -285,6 +288,7 @@ fn run(
     signal: &AtomicUsize,
     foreground: bool,
     startup_stream: &mut Option<UnixStream>,
+    program: &Path,
 ) -> Result<i32> {
     session.state = Status::Running;
     session.updated_at = state::now();
@@ -425,7 +429,7 @@ fn run(
                 ),
                 foreground,
             )?;
-            let mut child = OwnedSsh::spawn(session)?;
+            let mut child = OwnedSsh::spawn(paths, session, program)?;
             session.ssh_pid = Some(child.pid());
             // Retain ownership before opening logs so error cleanup still reaps this child.
             let child_logs = child.logs(paths, session, foreground);

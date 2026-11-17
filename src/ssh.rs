@@ -10,19 +10,17 @@ use nix::{
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::process::CommandExt,
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::mpsc::{Receiver, channel},
     thread,
+    time::{Duration, Instant},
 };
 
-pub fn arguments(session: &Session) -> Vec<String> {
+pub fn arguments(session: &Session, supports_fork: bool) -> Vec<String> {
     let mut args = vec!["-N".into(), "-T".into()];
     for option in [
-        // Older clients cannot fork through this configuration option because it does not exist.
-        // Newer clients must still override a user's ForkAfterAuthentication=yes.
-        "IgnoreUnknown=ForkAfterAuthentication",
         "BatchMode=yes",
         "ExitOnForwardFailure=yes",
         "ServerAliveInterval=15",
@@ -32,7 +30,6 @@ pub fn arguments(session: &Session) -> Vec<String> {
         "ControlMaster=no",
         "ControlPath=none",
         "ControlPersist=no",
-        "ForkAfterAuthentication=no",
         "ForwardAgent=no",
         "ForwardX11=no",
         "PermitLocalCommand=no",
@@ -40,6 +37,9 @@ pub fn arguments(session: &Session) -> Vec<String> {
         "ClearAllForwardings=no",
     ] {
         args.extend(["-o".into(), option.into()]);
+    }
+    if supports_fork {
+        args.extend(["-o".into(), "ForkAfterAuthentication=no".into()]);
     }
     for mapping in &session.mappings {
         args.extend([
@@ -65,10 +65,48 @@ pub struct OwnedSsh {
     reaped: bool,
 }
 
+pub fn executable() -> Result<PathBuf> {
+    let search = std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into());
+    let mut denied = false;
+    for directory in std::env::split_paths(&search) {
+        let candidate = directory.join("ssh");
+        if let Ok(metadata) = candidate.metadata() {
+            if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+                return Ok(fs::canonicalize(candidate)?);
+            }
+            denied = true;
+        }
+    }
+    Err(Error::with_code(
+        if denied { 126 } else { 127 },
+        "cannot execute ssh; install OpenSSH and check PATH and executable permissions",
+    ))
+}
+
 impl OwnedSsh {
-    pub fn spawn(session: &Session) -> Result<Self> {
-        let child = Command::new("ssh")
-            .args(arguments(session))
+    pub fn spawn(paths: &Paths, session: &Session, program: &Path) -> Result<Self> {
+        note(
+            paths,
+            session,
+            &format!(
+                "ford {} supervisor {}: SSH attempt {} using {}",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id(),
+                session.retry_count + 1,
+                program.display()
+            ),
+            false,
+        )?;
+        let supports_fork = Self::supports_fork(paths, session, program)?;
+        let args = arguments(session, supports_fork);
+        note(
+            paths,
+            session,
+            &format!("SSH arguments: {}", serde_json::to_string(&args)?),
+            false,
+        )?;
+        let child = Command::new(program)
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -88,6 +126,85 @@ impl OwnedSsh {
             child,
             reaped: false,
         })
+    }
+
+    fn supports_fork(paths: &Paths, session: &Session, program: &Path) -> Result<bool> {
+        // -G only prints configuration. -F /dev/null excludes user/system configuration and commands.
+        // Inspect a known key instead of passing a possibly unsupported option or parsing a version string.
+        let child = Command::new(program)
+            .args(["-G", "-T", "-F", "/dev/null", "ford-config-probe.invalid"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .map_err(|error| {
+                Error::with_code(
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        127
+                    } else {
+                        126
+                    },
+                    format!(
+                        "cannot inspect SSH capabilities at {}: {error}",
+                        program.display()
+                    ),
+                )
+            })?;
+        let mut probe = Self {
+            child,
+            reaped: false,
+        };
+        let diagnostics = probe.logs(paths, session, false)?;
+        let stdout = probe
+            .child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::new("SSH configuration output unavailable"))?;
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let result = stdout.take(65537).read_to_end(&mut bytes).map(|_| bytes);
+            let _ = tx.send(result);
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if probe.exited()? {
+                let status = probe.reap()?;
+                diagnostics
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|_| Error::new("SSH configuration diagnostics did not finish"))??;
+                if !status.success() {
+                    return Err(Error::with_code(
+                        status.code().filter(|code| *code > 0).unwrap_or(1),
+                        format!(
+                            "SSH configuration inspection failed: {status}; OpenSSH 7.6 or newer is required"
+                        ),
+                    ));
+                }
+                let bytes = rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .map_err(|_| Error::new("SSH configuration output did not finish"))??;
+                if bytes.len() > 65536 {
+                    return Err(Error::new("SSH configuration output exceeds 64 KiB"));
+                }
+                let config = String::from_utf8_lossy(&bytes);
+                if !config.lines().any(|line| line.starts_with("hostname ")) {
+                    return Err(Error::new("SSH client did not return a configuration dump"));
+                }
+                return Ok(config
+                    .lines()
+                    .any(|line| line.starts_with("forkafterauthentication ")));
+            }
+            if Instant::now() >= deadline {
+                probe.reap()?;
+                diagnostics
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|_| Error::new("SSH configuration diagnostics did not finish"))??;
+                return Err(Error::new("SSH configuration inspection timed out"));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     pub fn pid(&self) -> u32 {

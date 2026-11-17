@@ -122,6 +122,7 @@ ford devbox 8080:3000 --name web --retry=10    # Choose a lifetime limit from 0 
 Retries are off by default. Delays grow from 1, 2, 4, 8, 16 to 30 seconds, capped at 30 seconds. `ford list` shows
 `retrying` between attempts. The budget does not reset after recovery; errors remain in logs, and exhaustion ends the
 session. `close` or foreground Ctrl+C cancels retries. Existing TCP/WebSocket connections must reopen after recovery.
+Logs identify the supervisor version, SSH executable, and arguments for every attempt, including retries.
 
 ## Manage and check sessions
 

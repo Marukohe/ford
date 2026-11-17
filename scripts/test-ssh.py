@@ -233,7 +233,7 @@ Host *
 """)
         wrapper = root / "bin/ssh"
         wrapper.write_text(
-            '#!/bin/sh\nif [ "${FORD_TEST_NO_LISTENER:-}" = 1 ]; then exec sleep 300; fi\n'
+            '#!/bin/sh\nif [ "$1" != -G ] && [ "${FORD_TEST_NO_LISTENER:-}" = 1 ]; then exec sleep 300; fi\n'
             f"exec {shlex.quote(ssh)} -F {shlex.quote(str(config))} \"$@\"\n"
         )
         wrapper.chmod(0o700)
@@ -479,8 +479,11 @@ Host *
             pending = state("reconnect")
             assert pending["target"] == "unverified" and not pending.get("target_checks")
             assert pending["ssh_pid"] is None and pending["retry_at"]
-            wait_for(lambda: state("reconnect")["state"] == "retrying"
-                     and state("reconnect").get("retry_count") == 1, "retry during jump-host outage")
+            def retry_after_refusal():
+                current = state("reconnect")
+                return current["state"] == "retrying" and current.get("retry_count") == 1
+
+            wait_for(retry_after_refusal, "retry during jump-host outage")
             daemon = subprocess.Popen([sshd, "-D", "-e", "-f", str(root / "sshd-0.conf")],
                                       stdout=daemon_logs[0], stderr=daemon_logs[0])
             daemons[0] = daemon
@@ -527,6 +530,19 @@ Host *
             check("mixed sessions keep SOCKS health unverified after a successful fixed-mapping check")
 
             proxy = free_port()
+            ford("good", "--socks", proxy, "--retry", "--name", "outbound")
+            wait_for(lambda: proxy_fetch(proxy, target) == PAYLOAD, "direct local SOCKS forwarding")
+            original = state("outbound")
+            for attempt in [1, 2]:
+                os.kill(state("outbound")["ssh_pid"], signal.SIGKILL)
+                wait_for(lambda: state("outbound").get("retry_count") == attempt
+                         and proxy_fetch(proxy, target) == PAYLOAD, "direct local SOCKS reconnection")
+                assert state("outbound")["supervisor_pid"] == original["supervisor_pid"]
+            ford("close", "outbound")
+            wait_for(lambda: released(proxy), "reconnected local SOCKS port release")
+            check("direct local SOCKS reconnects twice with the default retry policy")
+
+            proxy = free_port()
             ford("good", "--reverse-socks", proxy, "--retry=2", "--name", "reverse")
             wait_for(lambda: proxy_fetch(proxy, target) == PAYLOAD, "reverse SOCKS forwarding")
             assert proxy_fetch(proxy, target, "/bulk") == BULK
@@ -534,11 +550,14 @@ Host *
             assert original["target"] == "unverified" and original["mappings"] == []
             assert ford("check", "reverse", "--http", "/", check=False).returncode == 2
             ford("group", "save", "proxy-group", "reverse")
-            os.kill(original["ssh_pid"], signal.SIGKILL)
-            wait_for(lambda: state("reverse").get("retry_count") == 1
-                     and proxy_fetch(proxy, target) == PAYLOAD, "reverse SOCKS reconnection")
-            assert state("reverse")["id"] == original["id"]
-            assert state("reverse")["supervisor_pid"] == original["supervisor_pid"]
+            for attempt in [1, 2]:
+                current = state("reverse")
+                os.kill(current["ssh_pid"], signal.SIGKILL)
+                wait_for(lambda: state("reverse").get("retry_count") == attempt
+                         and proxy_fetch(proxy, target) == PAYLOAD, "reverse SOCKS reconnection")
+                assert state("reverse")["id"] == original["id"]
+                assert state("reverse")["supervisor_pid"] == original["supervisor_pid"]
+            assert "SSH attempt 3 using" in ford("logs", "reverse").stdout
             ford("group", "close", "proxy-group")
             wait_for(lambda: released(proxy), "reconnected reverse SOCKS port release")
             ford("group", "open", "proxy-group")

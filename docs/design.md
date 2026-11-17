@@ -159,7 +159,6 @@ The intended arguments for `ford devbox 8080:300` are equivalent to:
 
 ```bash
 ssh -N -T \
-  -o IgnoreUnknown=ForkAfterAuthentication \
   -o BatchMode=yes \
   -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=15 \
@@ -192,10 +191,17 @@ over the lifecycle, and disable agent/X11 forwarding and `LocalCommand`/`RemoteC
 foreground of the supervisor's execution model; the Rust supervisor handles background operation. Neither mode uses `ssh
 -f`.
 
-`ForkAfterAuthentication` was added in OpenSSH 8.7. Put the narrowly scoped
-`IgnoreUnknown=ForkAfterAuthentication` first so older clients can start. They cannot fork through that unknown
-configuration option; ford never supplies `-f`. Newer clients still honor the explicit `no` override. Do not ignore
-unknown options generally or suppress authentication, host key, or forwarding failures.
+`ForkAfterAuthentication` was added in OpenSSH 8.7. Resolve the SSH executable to an absolute path once per supervisor,
+then use that path for startup and every retry. Before each attempt, inspect its defaults with
+`ssh -G -T -F /dev/null ford-config-probe.invalid`. This prints configuration without connecting or reading user SSH
+configuration. Include `ForkAfterAuthentication=no` only when the dump exposes that option; otherwise omit it entirely.
+The command example above shows a supporting client. ford never supplies `-f` or uses `IgnoreUnknown` to hide options.
+
+Run the capability probe as an owned child with a two-second execution deadline, bounded 64 KiB stdout, and explicit
+termination and reaping. Preserve its stderr in the session log. Log the supervisor build version, process ID,
+selected SSH executable, attempt number, and structured SSH arguments before each tunnel spawn. Only ford's arguments
+are logged; do not dump user SSH configuration, environment, passwords, or key contents. The actual tunnel still uses
+normal user SSH configuration. A different binary or capability result on retry remains visible in these logs.
 
 The first release uses `BatchMode=yes` in both modes, with SSH stdin redirected to the null device. It supports
 configured keys and agent authentication without waiting for passwords, passphrases, or host key confirmation in the

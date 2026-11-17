@@ -43,24 +43,33 @@ publish() {
   shift
   printf '%s\n' "$@" > "$fixture_temp" && mv "$fixture_temp" "$fixture_file"
 }
+if [ "$1" = -G ]; then
+    if [ "$FORD_TEST_MODE" = probehang ]; then
+        publish "$FORD_TEST_HELPER" "$$"
+        exec sleep 300
+    fi
+    printf 'hostname ford-config-probe.invalid\n'
+    if [ ! -f "$FORD_TEST_OLD" ]; then
+        case "$FORD_TEST_MODE" in legacy|legacy-flaky) ;; *) printf 'forkafterauthentication no\n' ;; esac
+    fi
+    exit 0
+fi
 printf 'SSH fixture diagnostic\n' >&2
-if [ "$FORD_TEST_MODE" = legacy ]; then
-    ignore_fork=false
+legacy=false
+case "$FORD_TEST_MODE" in legacy|legacy-flaky) legacy=true ;; esac
+if [ "$legacy" = true ] || [ -f "$FORD_TEST_OLD" ]; then
     for argument in "$@"; do
         case "$argument" in
-            IgnoreUnknown=ForkAfterAuthentication) ignore_fork=true ;;
             ForkAfterAuthentication=*)
-                if [ "$ignore_fork" != true ]; then
-                    printf 'command-line: line 0: Bad configuration option: forkafterauthentication\n' >&2
-                    exit 255
-                fi ;;
+                printf 'command-line: line 0: Bad configuration option: forkafterauthentication\n' >&2
+                exit 255 ;;
         esac
     done
 fi
 publish "$FORD_TEST_ARGS" "$@"
 case "$FORD_TEST_MODE" in
   fail) exit 255 ;;
-  flaky)
+  flaky|legacy-flaky)
     if [ ! -f "$FORD_TEST_ONCE" ]; then
       printf 'first SSH attempt failed\n' >&2
       : > "$FORD_TEST_ONCE"
@@ -110,6 +119,7 @@ esac
             )
             .env("FORD_TEST_ARGS", root.join("args"))
             .env("FORD_TEST_ONCE", root.join("once"))
+            .env("FORD_TEST_OLD", root.join("legacy-client"))
             .env("FORD_TEST_HELPER", root.join("helper"));
         command
     }
@@ -297,8 +307,7 @@ fn reverse_socks_starts_with_a_client_that_does_not_know_fork_after_authenticati
     assert_eq!(session.get("retry_count"), None);
     wait_for(|| f.root.path().join("args").exists());
     let args = fs::read_to_string(f.root.path().join("args")).unwrap();
-    assert!(args.contains("IgnoreUnknown=ForkAfterAuthentication"));
-    assert!(args.contains("ForkAfterAuthentication=no"));
+    assert!(!args.contains("ForkAfterAuthentication"));
     assert!(
         !args
             .lines()
@@ -307,6 +316,117 @@ fn reverse_socks_starts_with_a_client_that_does_not_know_fork_after_authenticati
     f.ok(&["close", "legacy"]);
     assert_eq!(f.session("legacy")["state"], "closed");
     assert_eq!(f.session("legacy")["cleanup_complete"], true);
+}
+
+#[test]
+fn socks_retries_keep_legacy_arguments_and_record_attempt_context() {
+    for (option, direction) in [("--socks", "-D"), ("--reverse-socks", "-R")] {
+        let f = Fixture::new();
+        assert!(
+            f.command()
+                .env("FORD_TEST_MODE", "legacy-flaky")
+                .args([
+                    "server",
+                    option,
+                    "1080",
+                    "--retry",
+                    "--name",
+                    "legacy-retry"
+                ])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        for count in [1, 2] {
+            let mut current = Value::Null;
+            wait_for(|| {
+                current = f.session("legacy-retry");
+                current["state"] == "running" && current["retry_count"] == count
+            });
+            let args = fs::read_to_string(f.root.path().join("args")).unwrap();
+            assert!(!args.contains("ForkAfterAuthentication"));
+            assert!(args.contains(&format!("{direction}\n127.0.0.1:1080\n")));
+            if count == 1 {
+                kill(
+                    Pid::from_raw(current["ssh_pid"].as_u64().unwrap() as i32),
+                    Signal::SIGKILL,
+                )
+                .unwrap();
+            }
+        }
+        let logs = f.ok(&["logs", "legacy-retry"]);
+        let logs = String::from_utf8_lossy(&logs.stdout);
+        assert!(logs.contains(&format!("ford {} supervisor", env!("CARGO_PKG_VERSION"))));
+        assert!(logs.contains("SSH attempt 3 using"));
+        assert!(!logs.contains("ForkAfterAuthentication"));
+        f.ok(&["close", "legacy-retry"]);
+    }
+}
+
+#[test]
+fn retry_rechecks_capabilities_when_the_ssh_client_changes() {
+    let f = Fixture::new();
+    f.ok(&[
+        "server",
+        "--reverse-socks",
+        "1080",
+        "--retry",
+        "--name",
+        "changed-client",
+    ]);
+    let original = f.session("changed-client");
+    let arguments = f.root.path().join("args");
+    wait_for(|| arguments.exists());
+    assert!(
+        fs::read_to_string(&arguments)
+            .unwrap()
+            .contains("ForkAfterAuthentication=no")
+    );
+    fs::remove_file(&arguments).unwrap();
+    fs::write(f.root.path().join("legacy-client"), "legacy").unwrap();
+    kill(
+        Pid::from_raw(original["ssh_pid"].as_u64().unwrap() as i32),
+        Signal::SIGKILL,
+    )
+    .unwrap();
+    wait_for(|| arguments.exists() && f.session("changed-client")["retry_count"] == 1);
+    let current = f.wait_state("changed-client", "running");
+    assert_eq!(current["supervisor_pid"], original["supervisor_pid"]);
+    assert!(
+        !fs::read_to_string(arguments)
+            .unwrap()
+            .contains("ForkAfterAuthentication")
+    );
+    f.ok(&["close", "changed-client"]);
+}
+
+#[test]
+fn a_hung_capability_probe_is_terminated_and_reaped_without_starting_a_tunnel() {
+    let f = Fixture::new();
+    let output = f
+        .command()
+        .env("FORD_TEST_MODE", "probehang")
+        .args(["server", "--reverse-socks", "1080", "--name", "probe-hang"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let failed = f.session("probe-hang");
+    assert_eq!(failed["state"], "failed");
+    assert_eq!(failed["cleanup_complete"], true);
+    assert!(
+        failed["error"]
+            .as_str()
+            .unwrap()
+            .contains("inspection timed out")
+    );
+    assert!(!f.root.path().join("args").exists());
+    let pid: i32 = fs::read_to_string(f.root.path().join("helper"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(kill(Pid::from_raw(pid), None).is_err());
 }
 
 #[test]
