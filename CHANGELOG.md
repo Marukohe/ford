@@ -4,6 +4,12 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+### Changed
+
+- Keep automatic reconnection alive through longer outages: `--retry` now allows ten restarts, with three quick
+  attempts followed by increasing waits capped at five minutes. The default waits total about 19 minutes.
+- Keep explicit `--retry=N` limits and saved group limits while applying the longer retry schedule to new sessions.
+
 ## [0.4.3]
 
 ### Fixed

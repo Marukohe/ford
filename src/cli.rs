@@ -119,8 +119,8 @@ pub struct Open {
     /// SSH through a jump host: alias or user@host[:port]
     #[arg(short = 'J', long, value_name = "HOST")]
     pub jump: Option<String>,
-    /// Retry unexpected SSH exits (default: 5 retries; use --retry=N to choose 0..=100)
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "5",
+    /// Retry SSH exits: quick attempts, then waits up to 5 minutes (default: 10; --retry=N selects 0..=100)
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "10",
           value_parser = clap::value_parser!(u32).range(0..=100))]
     pub retry: Option<u32>,
     /// Stream logs and close on Ctrl+C instead of detaching

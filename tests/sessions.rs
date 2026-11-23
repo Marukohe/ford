@@ -69,6 +69,10 @@ fi
 publish "$FORD_TEST_ARGS" "$@"
 case "$FORD_TEST_MODE" in
   fail) exit 255 ;;
+  outage)
+    if [ ! -f "$FORD_TEST_ONCE" ]; then exit 255; fi
+    exec sleep 300
+    ;;
   flaky|legacy-flaky)
     if [ ! -f "$FORD_TEST_ONCE" ]; then
       printf 'first SSH attempt failed\n' >&2
@@ -1020,12 +1024,12 @@ fn retry_recovers_the_same_session_and_preserves_logs_and_group_policy() {
     });
     assert_eq!(recovered["id"], original["id"]);
     assert_eq!(recovered["supervisor_pid"], original["supervisor_pid"]);
-    assert_eq!(recovered["retry"], 5);
+    assert_eq!(recovered["retry"], 10);
     assert_eq!(recovered["retry_at"], Value::Null);
     let logs = f.ok(&["logs", "retry"]);
     let logs = String::from_utf8_lossy(&logs.stdout);
     assert!(logs.contains("first SSH attempt failed"));
-    assert!(logs.contains("starting SSH retry 1/5"));
+    assert!(logs.contains("starting SSH retry 1/10"));
     assert_eq!(logs.matches("SSH fixture diagnostic").count(), 2);
     kill(
         Pid::from_raw(recovered["ssh_pid"].as_u64().unwrap() as i32),
@@ -1046,14 +1050,14 @@ fn retry_recovers_the_same_session_and_preserves_logs_and_group_policy() {
         &fs::read(f.root.path().join("state/ford/groups/work.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(group["sessions"][0]["retry"], 5);
+    assert_eq!(group["sessions"][0]["retry"], 10);
     assert!(group["sessions"][0].get("retry_count").is_none());
     f.ok(&["group", "close", "work"]);
     f.ok(&["group", "open", "work"]);
     let sessions = f.sessions();
     let restored = sessions.iter().find(|s| s["state"] == "running").unwrap();
     assert_ne!(restored["id"], original["id"]);
-    assert_eq!(restored["retry"], 5);
+    assert_eq!(restored["retry"], 10);
     assert_eq!(
         restored
             .get("retry_count")
@@ -1061,6 +1065,84 @@ fn retry_recovers_the_same_session_and_preserves_logs_and_group_policy() {
             .unwrap_or(0),
         0
     );
+}
+
+#[test]
+fn a_longer_outage_recovers_after_quick_retries_and_slow_waits_remain_cancellable() {
+    let f = Fixture::new();
+    assert!(
+        f.command()
+            .env("FORD_TEST_MODE", "outage")
+            .args(["devbox", "--socks", "1080", "--name", "outage", "--retry"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let original = f.session("outage");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let waiting = loop {
+        let current = f.session("outage");
+        if current["state"] == "retrying" && current["retry_count"] == 3 {
+            break current;
+        }
+        assert!(Instant::now() < deadline, "quick retries did not finish");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(waiting["retry"], 10);
+    assert_eq!(waiting["ssh_pid"], Value::Null);
+    assert_eq!(waiting["exit_code"], 255);
+    assert_eq!(
+        waiting["retry_at"].as_u64().unwrap() - waiting["updated_at"].as_u64().unwrap(),
+        15
+    );
+    assert!(
+        waiting["error"]
+            .as_str()
+            .unwrap()
+            .contains("retry 4/10 in 15s")
+    );
+
+    // Restore the simulated endpoint during the slower phase; keep the scheduled wait intact.
+    fs::remove_file(f.root.path().join("args")).unwrap();
+    fs::write(f.root.path().join("once"), "network restored").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let recovered = loop {
+        let current = f.session("outage");
+        if current["state"] == "running" && current["retry_count"] == 4 {
+            break current;
+        }
+        assert!(Instant::now() < deadline, "slow retry did not recover");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(recovered["id"], original["id"]);
+    assert_eq!(recovered["supervisor_pid"], original["supervisor_pid"]);
+    assert_eq!(recovered["retry_at"], Value::Null);
+    wait_for(|| f.root.path().join("args").exists());
+    kill(
+        Pid::from_raw(recovered["ssh_pid"].as_u64().unwrap() as i32),
+        Signal::SIGKILL,
+    )
+    .unwrap();
+    let waiting = f.wait_state("outage", "retrying");
+    assert!(
+        waiting["error"]
+            .as_str()
+            .unwrap()
+            .contains("retry 5/10 in 30s")
+    );
+    let start = Instant::now();
+    f.ok(&["close", "outage"]);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    let closed = f.session("outage");
+    assert_eq!(closed["state"], "closed");
+    assert_eq!(closed["cleanup_complete"], true);
+    assert_eq!(closed["retry_count"], 4);
+    assert_eq!(closed["retry_at"], Value::Null);
+    let logs = f.ok(&["logs", "outage"]);
+    let logs = String::from_utf8_lossy(&logs.stdout);
+    assert_eq!(logs.matches("SSH fixture diagnostic").count(), 5);
+    assert!(!logs.contains("starting SSH retry 5/10"));
 }
 
 #[test]

@@ -134,7 +134,7 @@ For an SSH alias with a reserved name, use the explicit form, such as `ford open
   support list/close from another terminal.
 - `--name` is optional; every session has a unique ID that is never reused. Restrict the name character set and never
   use names to construct paths. Reject an active name conflict for the current user instead of overwriting the session.
-- `--retry` enables up to five SSH restarts; `--retry=N` selects 0 through 100. Absence or zero disables retrying.
+- `--retry` enables up to ten SSH restarts; `--retry=N` selects 0 through 100. Absence or zero disables retrying.
   Browser opening, automatic port selection, and LAN binding options remain outside the current implementation.
 - `--socks PORT` requests a local SOCKS listener whose connections exit through the final SSH host.
   `--reverse-socks PORT` requests a listener on that host whose connections exit through the machine running ford.
@@ -368,10 +368,14 @@ They do not establish HTTP health. Reconnection starts only after SSH exits.[3]
 
 ### Bounded Reconnection
 
-Retrying is opt-in. `--retry` allows five replacement SSH processes, and `--retry=N` selects 0 through 100.
+Retrying is opt-in. `--retry` allows ten replacement SSH processes, and `--retry=N` selects 0 through 100.
 The budget covers the entire session lifetime; it does not reset when a child remains alive. Process liveness alone
-cannot establish a successful SSH connection. Backoff waits are 1, 2, 4, 8, 16, then 30 seconds, capped at 30 seconds.
-Use monotonic deadlines for scheduling and a Unix timestamp only for display.
+cannot establish a successful SSH connection. The first three waits are 1, 2, and 5 seconds for brief interruptions.
+Later waits are 15, 30, 60, 120, then 300 seconds; all subsequent waits remain at 300 seconds. The default ten retries
+provide 1,133 seconds (18 minutes 53 seconds) of waiting, plus the time spent in SSH attempts. Explicit limits use
+the same schedule and stop after exactly that many replacements. Use monotonic deadlines for scheduling and a Unix
+timestamp only for display. Existing supervisors keep their previous policy until restarted; saved groups retain
+their explicit retry limits and use the current schedule when reopened.
 
 An unexpected SSH exit, including exit 0 or 255, is eligible while budget remains. Do not classify network,
 authentication, host key, or port bind errors by parsing stderr. All remain visible and consume the same finite

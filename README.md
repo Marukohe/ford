@@ -115,13 +115,18 @@ SOCKS mappings, survive restarts, and leave unrelated sessions alone. Resolve na
 ## Reconnect automatically
 
 ```bash
-ford devbox 8080:3000 --name web --retry       # Up to five SSH restarts
-ford devbox 8080:3000 --name web --retry=10    # Choose a lifetime limit from 0 to 100
+ford devbox 8080:3000 --name web --retry       # Up to ten SSH restarts
+ford devbox 8080:3000 --name web --retry=20    # Choose a lifetime limit from 0 to 100
 ```
 
-Retries are off by default. Delays grow from 1, 2, 4, 8, 16 to 30 seconds, capped at 30 seconds. `ford list` shows
-`retrying` between attempts. The budget does not reset after recovery; errors remain in logs, and exhaustion ends the
-session. `close` or foreground Ctrl+C cancels retries. Existing TCP/WebSocket connections must reopen after recovery.
+Retries are off by default. `--retry` makes three quick attempts after **1s, 2s, and 5s**, then waits **15s, 30s, 1m,
+2m, 5m, 5m, and 5m** for the remaining attempts. This allows about 19 minutes of waiting, plus SSH connection time.
+`--retry=N` uses the same schedule, capped at five minutes between attempts. `ford list` shows `retrying`;
+`ford list --json` includes the next attempt's `retry_at` timestamp. The budget does not reset after recovery;
+errors remain in logs, and exhaustion ends the session.
+`close` or foreground Ctrl+C cancels even a long wait immediately. Existing TCP/WebSocket connections must reopen.
+Existing sessions need to be closed and recreated to use the new timing. Saved groups retain their retry count;
+resave a group to change its limit.
 Logs identify the supervisor version, SSH executable, and arguments for every attempt, including retries.
 
 ## Manage and check sessions

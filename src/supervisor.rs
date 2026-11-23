@@ -33,6 +33,12 @@ use std::{
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
+fn retry_delay(retries_started: u32) -> Duration {
+    // Recover brief interruptions quickly, then leave room for a longer network outage.
+    const SECONDS: [u64; 8] = [1, 2, 5, 15, 30, 60, 120, 300];
+    Duration::from_secs(SECONDS[(retries_started as usize).min(SECONDS.len() - 1)])
+}
+
 #[derive(Deserialize, Serialize)]
 struct Handshake {
     version: u32,
@@ -342,7 +348,7 @@ fn run(
                 && session.retry_count < session.retry.unwrap_or(0)
                 && signal.load(Ordering::Relaxed) == 0
             {
-                let delay = Duration::from_secs((1u64 << session.retry_count.min(5)).min(30));
+                let delay = retry_delay(session.retry_count);
                 session.state = Status::Retrying;
                 session.ssh_pid = None;
                 session.retry_at = Some(state::now() + delay.as_secs());
@@ -640,5 +646,31 @@ fn wait_listener(listener: &UnixListener, milliseconds: u16) -> Result<()> {
     match poll(&mut fds, milliseconds) {
         Ok(_) | Err(nix::errno::Errno::EINTR) => Ok(()),
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn retry_schedule_balances_fast_recovery_with_a_bounded_outage_window() {
+        let delays: Vec<_> = (0..100).map(retry_delay).collect();
+        assert!(
+            delays[..3]
+                .iter()
+                .all(|delay| *delay <= Duration::from_secs(5))
+        );
+        assert!(delays.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(
+            delays
+                .iter()
+                .all(|delay| !delay.is_zero() && *delay <= Duration::from_secs(300))
+        );
+        let default_wait: Duration = delays[..10].iter().sum();
+        assert!(default_wait >= Duration::from_secs(15 * 60));
+        assert!(default_wait <= Duration::from_secs(20 * 60));
+        assert_eq!(retry_delay(u32::MAX), Duration::from_secs(300));
     }
 }
