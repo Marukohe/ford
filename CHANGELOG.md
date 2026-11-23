@@ -4,6 +4,8 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+## [0.4.4]
+
 ### Changed
 
 - Keep automatic reconnection alive through longer outages: `--retry` now allows ten restarts, with three quick

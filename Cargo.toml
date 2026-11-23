@@ -1,6 +1,6 @@
 [package]
 name = "ford"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 rust-version = "1.93"
 description = "Lightweight SSH port forwarding with supervised sessions"
