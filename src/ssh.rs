@@ -41,14 +41,15 @@ pub fn arguments(session: &Session, supports_fork: bool) -> Vec<String> {
     if supports_fork {
         args.extend(["-o".into(), "ForkAfterAuthentication=no".into()]);
     }
+    let bind = session.bind_address();
     for mapping in &session.mappings {
         args.extend([
             "-L".into(),
-            format!("127.0.0.1:{}:127.0.0.1:{}", mapping.local, mapping.remote),
+            format!("{bind}:{}:127.0.0.1:{}", mapping.local, mapping.remote),
         ]);
     }
     for port in &session.socks {
-        args.extend(["-D".into(), format!("127.0.0.1:{port}")]);
+        args.extend(["-D".into(), format!("{bind}:{port}")]);
     }
     for port in &session.reverse_socks {
         args.extend(["-R".into(), format!("127.0.0.1:{port}")]);

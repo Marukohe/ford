@@ -66,9 +66,13 @@ ford devbox 3000                              # localhost:3000 -> devbox:3000
 ford devbox 8080:3000 --name web               # localhost:8080 -> devbox:3000
 ford devbox 3000 5173 8080:8000 --name dev      # Several ports, one session
 ford internal 8080:3000 --jump bastion         # SSH through bastion into internal
+ford devbox 8080:3000 --bind 0.0.0.0 --name lan-web  # Listen on all local IPv4 interfaces
 ```
 
-Fixed mappings connect to `127.0.0.1` on the remote machine. Local listeners bind to `127.0.0.1`.
+Fixed mappings connect to `127.0.0.1` on the remote machine. Local listeners default to `127.0.0.1`.
+Use `--bind 0.0.0.0` to listen on all local IPv4 interfaces, or pass a specific local IPv4 address. Other devices
+connect using your machine's IP and the local port, subject to your firewall. This option applies to all fixed
+mappings and local SOCKS listeners in the session. Saved groups retain the bind address.
 Use SSH configuration for login ports and identities; jump hosts also accept `user@host:port`.
 
 ## Proxy outbound requests

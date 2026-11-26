@@ -10,6 +10,7 @@ use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
     io::{Read, Write},
+    net::Ipv4Addr,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     time::Duration,
@@ -31,6 +32,8 @@ struct Group {
 struct SavedSession {
     host: String,
     mappings: Vec<Mapping>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bind: Option<Ipv4Addr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     socks: Vec<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -47,6 +50,7 @@ impl SavedSession {
         Self {
             host: session.host,
             mappings: session.mappings,
+            bind: session.bind,
             socks: session.socks,
             reverse_socks: session.reverse_socks,
             name: session.name,
@@ -59,6 +63,7 @@ impl SavedSession {
         Open {
             host: self.host.clone(),
             ports: self.mappings.clone(),
+            bind: self.bind,
             socks: self.socks.clone(),
             reverse_socks: self.reverse_socks.clone(),
             name: self.name.clone(),
@@ -72,6 +77,7 @@ impl SavedSession {
         self.host == session.host
             && self.name == session.name
             && self.jump == session.jump
+            && self.bind.unwrap_or(Ipv4Addr::LOCALHOST) == session.bind_address()
             && self.retry.unwrap_or(0) == session.retry.unwrap_or(0)
             && self.socks.len() == session.socks.len()
             && self.socks.iter().all(|port| session.socks.contains(port))
@@ -265,8 +271,12 @@ pub fn run(command: GroupCommand) -> Result<i32> {
                     Some(jump) => format!("{jump} -> {}", saved.host),
                     None => saved.host,
                 };
-                let mappings =
-                    mapping::describe(&saved.mappings, &saved.socks, &saved.reverse_socks);
+                let mappings = mapping::describe(
+                    &saved.mappings,
+                    &saved.socks,
+                    &saved.reverse_socks,
+                    saved.bind,
+                );
                 let retry = saved
                     .retry
                     .map_or(String::new(), |limit| format!("  retry={limit}"));

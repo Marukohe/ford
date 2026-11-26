@@ -6,6 +6,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    net::{Ipv4Addr, SocketAddrV4},
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -125,12 +126,19 @@ pub fn run(paths: &Paths, stored: &Session, args: &Check) -> Result<i32> {
 
     // Checking both sides of the request prevents attributing another local listener's response
     // to SSH if the session has not bound its port yet or shuts down during the request.
-    verify_listener(pid, port)?;
+    let bind = live.bind_address();
+    let listener = SocketAddrV4::new(bind, port);
+    let endpoint = if bind.is_unspecified() {
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)
+    } else {
+        listener
+    };
+    verify_listener(pid, listener)?;
     let check = TargetCheck {
-        outcome: http_check(port, &args.http, args.expect_status)?,
+        outcome: http_check(endpoint, &args.http, args.expect_status)?,
         checked_at: state::now(),
     };
-    verify_listener(pid, port)?;
+    verify_listener(pid, listener)?;
     let code = i32::from(!matches!(
         check.outcome,
         Outcome::Reachable { .. } | Outcome::Ok { .. }
@@ -148,12 +156,11 @@ pub fn run(paths: &Paths, stored: &Session, args: &Check) -> Result<i32> {
         Duration::from_secs(1),
     )
     .map_err(|error| Error::new(format!("cannot record target check: {error}")))?;
-    println!("127.0.0.1:{port}: {label}");
+    println!("{endpoint}: {label}");
     Ok(code)
 }
 
-fn verify_listener(pid: u32, port: u16) -> Result<()> {
-    let address = format!("127.0.0.1:{port}");
+fn verify_listener(pid: u32, address: SocketAddrV4) -> Result<()> {
     let output = run_tool(
         "lsof",
         &[
@@ -164,7 +171,7 @@ fn verify_listener(pid: u32, port: u16) -> Result<()> {
             "-a",
             "-p",
             &pid.to_string(),
-            &format!("-iTCP@{address}"),
+            &format!("-i4TCP:{}", address.port()),
             "-sTCP:LISTEN",
             "-Fpn",
         ],
@@ -176,11 +183,15 @@ fn verify_listener(pid: u32, port: u16) -> Result<()> {
         let fields = String::from_utf8_lossy(&output.stdout);
         let owner = format!("p{pid}");
         let listener = format!("n{address}");
+        // lsof prints '*' for wildcard sockets. The IPv4 filter excludes IPv6 listeners.
+        let wildcard = format!("n*:{}", address.port());
         let mut owned = false;
         for field in fields.lines() {
             if field.starts_with('p') {
                 owned = field == owner;
-            } else if owned && field == listener {
+            } else if owned
+                && (field == listener || (address.ip().is_unspecified() && field == wildcard))
+            {
                 return Ok(());
             }
         }
@@ -190,7 +201,7 @@ fn verify_listener(pid: u32, port: u16) -> Result<()> {
     )))
 }
 
-fn http_check(port: u16, path: &str, expected: Option<u16>) -> Result<Outcome> {
+fn http_check(endpoint: SocketAddrV4, path: &str, expected: Option<u16>) -> Result<Outcome> {
     let output = run_tool(
         "curl",
         &[
@@ -209,7 +220,7 @@ fn http_check(port: u16, path: &str, expected: Option<u16>) -> Result<Outcome> {
             "--write-out",
             "%{http_code}",
             "--url",
-            &format!("http://127.0.0.1:{port}{path}"),
+            &format!("http://{endpoint}{path}"),
         ],
         Duration::from_secs(4),
     )?;

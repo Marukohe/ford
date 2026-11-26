@@ -15,15 +15,17 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 
 PAYLOAD = b"ford SSH integration\n"
 BULK = bytes(range(256)) * 4096
+DIRECT_HTTP = build_opener(ProxyHandler({}))
 
 
 def free_port():
@@ -83,14 +85,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def fetch(port, path="/"):
-    with urlopen(f"http://127.0.0.1:{port}{path}", timeout=1) as response:
+def fetch(port, path="/", host="127.0.0.1"):
+    with DIRECT_HTTP.open(f"http://{host}:{port}{path}", timeout=1) as response:
         return response.read()
 
 
-def proxy_fetch(proxy, target, path="/"):
+def proxy_fetch(proxy, target, path="/", host="127.0.0.1"):
     result = subprocess.run(
-        ["curl", "--disable", "--noproxy", "", "--proxy", f"socks5h://127.0.0.1:{proxy}",
+        ["curl", "--disable", "--noproxy", "", "--proxy", f"socks5h://{host}:{proxy}",
          "--max-time", "3", "--silent", "--show-error", f"http://localhost:{target}{path}"],
         capture_output=True, timeout=5,
     )
@@ -121,9 +123,9 @@ def websocket(port):
         assert received == bytes([0x81, len(payload)]) + payload
 
 
-def released(port):
+def released(port, host="127.0.0.1"):
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+        with socket.create_connection((host, port), timeout=0.2):
             return False
     except ConnectionRefusedError:
         return True
@@ -270,6 +272,45 @@ Host *
             ford("close", "no-fork")
             wait_for(lambda: released(local), "configured backgrounding port release")
             check("SSH stays owned in the foreground when configuration requests backgrounding")
+
+            if sys.platform.startswith("linux"):
+                other = "127.0.0.2"
+                local, proxy = free_port(), free_port()
+                mapping = f"{local}:{target}"
+                ford("good", mapping, "--name", "loopback")
+                wait_for(lambda: fetch(local) == PAYLOAD, "default loopback forwarding")
+                assert released(local, other)
+                ford("close", "loopback")
+
+                ford("good", mapping, "--socks", proxy, "--bind", "0.0.0.0", "--name", "lan", "--retry=1")
+                wait_for(lambda: fetch(local, host=other) == PAYLOAD, "wildcard forwarding")
+                assert proxy_fetch(proxy, target, host=other) == PAYLOAD
+                assert "ok (HTTP 200)" in ford("check", "lan", "--http", "/", "--expect-status", 200).stdout
+                assert state("lan")["bind"] == "0.0.0.0"
+                assert "bind 0.0.0.0" in ford("list").stdout
+                os.kill(state("lan")["ssh_pid"], signal.SIGKILL)
+                wait_for(lambda: state("lan").get("retry_count") == 1 and fetch(local, host=other) == PAYLOAD,
+                         "wildcard forwarding after retry")
+                ford("group", "save", "lan-group", "lan")
+                assert "bind 0.0.0.0" in ford("group", "show", "lan-group").stdout
+                ford("group", "close", "lan-group")
+                wait_for(lambda: released(local, other) and released(proxy, other), "wildcard listener cleanup")
+
+                ford("good", mapping, "--socks", proxy, "--bind", other, "--name", "lan", "--retry=1")
+                wait_for(lambda: fetch(local, host=other) == PAYLOAD, "specific-address forwarding")
+                assert released(local)
+                assert ford("check", "lan", "--http", "/").stdout.startswith(f"{other}:{local}:")
+                assert ford("group", "open", "lan-group", check=False).returncode != 0
+                ford("group", "close", "lan-group")
+                assert fetch(local, host=other) == PAYLOAD
+                ford("close", "lan")
+                ford("group", "open", "lan-group")
+                wait_for(lambda: fetch(local, host=other) == PAYLOAD, "reopened wildcard forwarding")
+                assert fetch(local) == PAYLOAD
+                ford("group", "close", "lan-group")
+                wait_for(lambda: released(local, other) and released(proxy, other), "reopened wildcard release")
+                check("local IPv4 bind scopes real traffic, survives retry and group restore, and supports HTTP checks")
+
             local, second = free_port(), free_port()
             ford("good", f"{local}:{target}", f"{second}:{target}", "--name", "web")
             wait_for(lambda: fetch(local) == PAYLOAD and fetch(second) == PAYLOAD, "real multi-port HTTP forwarding")
@@ -441,6 +482,9 @@ Host *
                 ford("good", f"{busy}:{target}", "--name", "conflict", check=False)
                 wait_for(lambda: failed("conflict"), "local port conflict")
                 assert state("conflict")["mappings"][0]["local"] == busy
+                ford("good", f"{busy}:{target}", "--bind", "0.0.0.0", "--name", "wildcard-conflict", check=False)
+                wait_for(lambda: failed("wildcard-conflict"), "wildcard conflict with loopback listener")
+                assert state("wildcard-conflict")["mappings"][0]["local"] == busy
             check("port conflict fails without changing the requested port")
 
             for alias in ["noauth", "badkey"]:

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fmt, str::FromStr};
+use std::{collections::HashSet, fmt, net::Ipv4Addr, str::FromStr};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct Mapping {
@@ -61,8 +61,13 @@ pub fn local_ports<'a>(
         .chain(socks.iter().copied())
 }
 
-pub fn describe(mappings: &[Mapping], socks: &[u16], reverse_socks: &[u16]) -> String {
-    mappings
+pub fn describe(
+    mappings: &[Mapping],
+    socks: &[u16],
+    reverse_socks: &[u16],
+    bind: Option<Ipv4Addr>,
+) -> String {
+    let forwards = mappings
         .iter()
         .map(ToString::to_string)
         .chain(socks.iter().map(|port| format!("socks:{port}")))
@@ -72,7 +77,11 @@ pub fn describe(mappings: &[Mapping], socks: &[u16], reverse_socks: &[u16]) -> S
                 .map(|port| format!("reverse-socks:{port}")),
         )
         .collect::<Vec<_>>()
-        .join(",")
+        .join(",");
+    match bind {
+        Some(address) => format!("{forwards} (bind {address})"),
+        None => forwards,
+    }
 }
 
 pub fn validate_mappings(

@@ -3,7 +3,7 @@ use crate::{
     mapping::{Mapping, validate_host, validate_jump, validate_mappings, validate_name},
 };
 use clap::{Args, Parser, Subcommand};
-use std::ffi::OsString;
+use std::{ffi::OsString, net::Ipv4Addr};
 
 #[derive(Parser)]
 #[command(
@@ -108,6 +108,9 @@ pub struct Open {
     pub host: String,
     #[arg(num_args = 0..)]
     pub ports: Vec<Mapping>,
+    /// IPv4 address for local listeners (default 127.0.0.1, use 0.0.0.0 for all IPv4 interfaces)
+    #[arg(long, value_name = "IPV4")]
+    pub bind: Option<Ipv4Addr>,
     /// Local SOCKS port; connections exit through the SSH host (repeatable)
     #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(1..))]
     pub socks: Vec<u16>,
@@ -133,6 +136,12 @@ impl Open {
         validate_host(&self.host).map_err(|e| Error::with_code(2, e))?;
         validate_mappings(&self.ports, &self.socks, &self.reverse_socks)
             .map_err(|e| Error::with_code(2, e))?;
+        if self.bind.is_some() && self.ports.is_empty() && self.socks.is_empty() {
+            return Err(Error::with_code(
+                2,
+                "--bind requires a fixed mapping or --socks",
+            ));
+        }
         if self.retry.is_some_and(|limit| limit > 100) {
             return Err(Error::with_code(2, "retry limit must be in 0..=100"));
         }

@@ -4,6 +4,11 @@ Notable changes in each version of ford.
 
 ## [Unreleased]
 
+### Added
+
+- Set the local IPv4 address for fixed forwards and local SOCKS with `--bind`, including `0.0.0.0` for all interfaces.
+  Saved groups retain the address. The default remains `127.0.0.1`.
+
 ## [0.4.4]
 
 ### Changed

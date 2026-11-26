@@ -179,15 +179,16 @@ pub fn print_session(session: &Session) {
     if session.jump.is_some() {
         println!("SSH route: {}", session.ssh_route());
     }
+    let bind = session.bind_address();
     for mapping in &session.mappings {
         println!(
-            "Requested: 127.0.0.1:{} -> {}:127.0.0.1:{}",
+            "Requested: {bind}:{} -> {}:127.0.0.1:{}",
             mapping.local, session.host, mapping.remote
         );
     }
     for port in &session.socks {
         println!(
-            "Requested: local SOCKS 127.0.0.1:{port} -> egress via {}",
+            "Requested: local SOCKS {bind}:{port} -> egress via {}",
             session.host
         );
     }

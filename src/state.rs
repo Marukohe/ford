@@ -11,6 +11,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions, TryLockError},
     io::{Read, Write},
+    net::Ipv4Addr,
     os::unix::{
         ffi::OsStrExt,
         fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -64,6 +65,8 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<u64>,
     pub mappings: Vec<Mapping>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<Ipv4Addr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub socks: Vec<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -85,6 +88,10 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn bind_address(&self) -> Ipv4Addr {
+        self.bind.unwrap_or(Ipv4Addr::LOCALHOST)
+    }
+
     pub fn ssh_route(&self) -> String {
         match &self.jump {
             Some(jump) => format!("{jump} -> {}", self.host),
@@ -381,6 +388,7 @@ impl Paths {
             retry_count: 0,
             retry_at: None,
             mappings: open.ports,
+            bind: open.bind.filter(|address| *address != Ipv4Addr::LOCALHOST),
             socks: open.socks,
             reverse_socks: open.reverse_socks,
             state: Status::Starting,

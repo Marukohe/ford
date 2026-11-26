@@ -256,6 +256,9 @@ fn invalid_input_has_no_side_effects() {
         vec!["devbox", "3000", "--jump", "bastion:65536"],
         vec!["devbox", "3000", "--jump", "bastion:"],
         vec!["devbox", "3000", "--jump", "::1"],
+        vec!["devbox", "3000", "--bind", "*"],
+        vec!["devbox", "3000", "--bind", "::"],
+        vec!["devbox", "--reverse-socks", "1080", "--bind", "0.0.0.0"],
         vec!["devbox", "3000", "--retry=101"],
         vec!["devbox", "3000", "--retry=abc"],
     ] {

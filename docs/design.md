@@ -111,7 +111,7 @@ ford update --check
 ```
 
 Creation syntax: `ford <HOST> [PORT|LOCAL:REMOTE...] [--socks PORT] [--reverse-socks PORT] [--jump HOST]`
-`[--name NAME] [--retry[=N]] [--foreground]`. At least one fixed mapping or SOCKS listener is required.
+`[--bind IPV4] [--name NAME] [--retry[=N]] [--foreground]`. At least one fixed mapping or SOCKS listener is required.
 The explicit form is `ford open <HOST> ...`. Reserved names are `open`, `update`, `list`, `close`, `check`, `group`,
 and `logs`.
 For an SSH alias with a reserved name, use the explicit form, such as `ford open list 3000`.
@@ -119,6 +119,9 @@ For an SSH alias with a reserved name, use the explicit form, such as `ford open
 - `HOST` accepts SSH configuration aliases, hostnames, IPv4 addresses, and `user@host`. Use an SSH configuration alias
   for IPv6 destinations in the first release to avoid introducing additional address syntax.
 - `PORT` means `PORT:PORT`. The remote target address for every mapping is fixed to `127.0.0.1` on the remote machine.
+- `--bind IPV4` sets the address for all fixed mappings and local SOCKS listeners in the session. The default is
+  `127.0.0.1`. `0.0.0.0` listens on all local IPv4 interfaces. Only sessions with a local listener accept this option.
+  Session state and saved groups store non-default binds in an optional `bind` field. Older records use loopback.
 - Ports must be decimal integers in `1..=65535`. Reject zero, missing fields, extra separators, and duplicate local
   ports. Different local ports may map to the same remote port.
 - Do not bind and release a port in advance as an availability guarantee. The actual SSH bind determines the outcome.
@@ -135,7 +138,7 @@ For an SSH alias with a reserved name, use the explicit form, such as `ford open
 - `--name` is optional; every session has a unique ID that is never reused. Restrict the name character set and never
   use names to construct paths. Reject an active name conflict for the current user instead of overwriting the session.
 - `--retry` enables up to ten SSH restarts; `--retry=N` selects 0 through 100. Absence or zero disables retrying.
-  Browser opening, automatic port selection, and LAN binding options remain outside the current implementation.
+  Browser opening and automatic port selection remain outside the current implementation.
 - `--socks PORT` requests a local SOCKS listener whose connections exit through the final SSH host.
   `--reverse-socks PORT` requests a listener on that host whose connections exit through the machine running ford.
   Both options are repeatable, accept decimal ports in `1..=65535`, and may coexist with fixed mappings.
@@ -295,9 +298,10 @@ mapping. The port is required for multiple mappings. Any complete HTTP response 
 `--expect-status` additionally requires an exact status code. Missing responses are recorded as timeouts or
 connection errors. Probe results do not change the lifecycle state or cause reconnection.
 
-The CLI queries the live supervisor for the SSH PID and mapping. It uses `lsof` to confirm SSH owns the exact loopback
-listener before and after the request. `curl` makes the HTTP request with a three-second transfer timeout, without
-proxies, user curl configuration, or redirect following. These system tools supply listener ownership and HTTP handling
+The CLI queries the live supervisor for the SSH PID and mapping. It uses `lsof` to confirm SSH owns the requested IPv4
+listener before and after the request. The HTTP probe connects to the bind address, using `127.0.0.1` for a wildcard
+listener. `curl` makes the HTTP request with a three-second transfer timeout, without proxies, user curl configuration,
+or redirect following. These system tools supply listener ownership and HTTP handling
 that the Rust standard library does not provide. They are needed only for `ford check` and add no work to idle sessions.
 
 The CLI submits the observation through the existing private control socket, including the SSH PID and retry count
@@ -477,19 +481,19 @@ replacement.
 its sessions. Group names follow session-name validation.
 
 Groups contain a schema version, name, save timestamp, and saved sessions. Each entry contains its SSH host, fixed
-mappings, SOCKS port arrays and their direction, optional session name, optional jump host, and optional retry limit.
+mappings, SOCKS port arrays and their direction, and optional session name, jump host, retry limit, and local bind.
 Process IDs, session IDs, retry counters, logs, and health observations are excluded. Reopening uses the current SSH
 configuration and creates fresh session IDs and retry budgets.
 
 Store groups under the private state directory in `groups/NAME.json`. Use owner-only files, reject symlinks and unsafe
 ownership or permissions, and publish updates by atomic rename. Limit group files to 64 KiB and each saved session
 configuration to 32 KiB, leaving room for lifecycle metadata and protocol envelopes. Revalidate all fields on read.
-Reject empty groups, duplicate session names, and overlapping local ports within a group.
+Reject empty groups, duplicate session names, and duplicate local port numbers within a group across bind addresses.
 Local SOCKS and fixed mappings share this local namespace. Reject duplicate reverse SOCKS ports for the same SSH host
 string, while allowing the same port on different hosts or on opposite sides. Alias equivalence is not inferred.
 
 `ford group open NAME` queries current sessions before launching anything. Matching running or retrying configurations
-are reused; names, host, jump host, retry limits, fixed mappings, and SOCKS ports and directions must match.
+are reused. Names, host, jump host, retry limits, local bind, fixed mappings, and SOCKS ports and directions must match.
 Known conflicting names, local ports, or reverse SOCKS ports on the same host, and matching unreachable/closing
 sessions cause an error before new sessions are created. SSH still determines actual bind success.
 New sessions launch independently; synchronous launch errors are reported with a nonzero aggregate exit code, and
@@ -580,11 +584,11 @@ levels. Do not sacrifice authentication, trust verification, truthful state, or 
 Rust with system SSH and a retained spawn-based supervisor is agreed. List/close belong in the first release and must
 not be removed to reduce initial scope or overhead.
 
-The implementation uses one supervisor per session, background operation by default with `--foreground`
-available, noninteractive authentication in both modes, Linux/macOS support only, and local bind and remote target
-addresses for fixed mappings initially fixed to `127.0.0.1`. SOCKS destinations are selected by each client request;
+The implementation supports Linux and macOS. Each session has one supervisor and defaults to background operation.
+Authentication is noninteractive in both modes. Fixed mappings target `127.0.0.1` on the SSH host. Local listeners
+default to loopback and accept an explicit IPv4 bind. Each SOCKS request selects its destination. Reverse SOCKS
 listeners request loopback, subject to the documented remote sshd policy. The running state means only that the SSH
-process is alive; an on-demand check records HTTP reachability separately.
+process is alive. An on-demand check records HTTP reachability separately.
 
 ## 12. Application Updates
 

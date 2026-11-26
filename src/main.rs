@@ -79,6 +79,7 @@ fn execute() -> Result<i32> {
                         &session.mappings,
                         &session.socks,
                         &session.reverse_socks,
+                        session.bind,
                     );
                     println!(
                         "{:<12} {:<16} {:<24} {:<24} {:<12} {}",
